@@ -1,3 +1,4 @@
+mod parser;
 mod tokenizer;
 
 use std::io::{self, Write};
@@ -17,8 +18,9 @@ pub fn get_input() -> String {
     String::from(user_input.trim())
 }
 
-pub fn evaluate_query(query: &String) {
-    let tokens = tokenizer::tokenize(&query);
+pub fn evaluate_query(query: &str) {
+    let seperated_strings: Vec<String> = tokenizer::seperate_tokens(query).unwrap();
+    let command = parser::parse_tokens(&tokens).unwrap();
 }
 
 #[derive(Debug)]
