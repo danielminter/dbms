@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
+    ffi::c_int,
     io::{self, Error},
-    os::raw::c_int,
 };
 
 pub fn tokenize(text: &str) -> Vec<Token> {
@@ -10,40 +10,308 @@ pub fn tokenize(text: &str) -> Vec<Token> {
 }
 
 fn tokenize_strings(strings: Vec<String>) -> Vec<Token> {
-    let mut queue = VecDeque::from(strings);
+    let queue = VecDeque::from(strings);
+
+    let tokens = match queue.front().unwrap().as_str() {
+        "CREATE" => tokenize_create_table(queue).unwrap(),
+        "INSERT" => tokenize_insert(queue).unwrap(),
+        "SELECT" => tokenize_select(queue).unwrap(),
+        _ => vec![],
+    };
+
+    tokens
+}
+
+fn tokenize_create_table(mut queue: VecDeque<String>) -> Result<Vec<Token>, io::Error> {
     let mut tokens: Vec<Token> = vec![];
+    if queue.pop_front().unwrap().as_str() != "CREATE"
+        || queue.pop_front().unwrap().as_str() != "TABLE"
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
 
-    while queue.front() != None {
-        let sequence: Vec<String> = vec![];
+    // Get the table name name
+    if queue.front().unwrap().as_str() == "DOUBLEQUOTE" {
+        // Create a slice of everything between quotes
+        let mut slice = pop_until(&mut queue, "DOUBLEQUOTE");
 
-        let next = queue.pop_front();
+        let token = match parse_enclosed_quotes(&mut slice) {
+            Ok(t) => t,
+            Err(_) => {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+            }
+        };
 
-        if next.unwrap().as_str() == "CREATE" {
-            match queue.pop_front().unwrap().as_str() {
-                "TABLE" => {
-                    let token = Token::Keyword(Keyword::new("CREATE TABLE".to_string()));
-                    tokens.push(token);
+        tokens.push(token);
+    } else {
+        let token = Token::Keyword(Keyword::new(queue.pop_front().unwrap()));
+        tokens.push(token);
+    }
+
+    if queue.pop_front().unwrap().as_str() != "LPAREN" {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
+
+    // Get the columns
+    // First get everything between the parenthesis
+    let mut slice = pop_until(&mut queue, "RPAREN");
+    'slice: loop {
+        // Discard the item if its the starting paren
+        if slice.front().unwrap().as_str() == "LPAREN" {
+            slice.pop_front();
+            continue;
+        // Break if its the ending paren
+        } else if slice.front().unwrap().as_str() == "RPAREN" {
+            slice.pop_front();
+            break;
+        }
+
+        // Grab the column name first
+        let item = slice.pop_front().unwrap();
+
+        // Push the column name identifier
+        tokens.push(Token::Identifier(Identifier::new(item)));
+
+        // Check for any and all constraints
+        'condtions: loop {
+            let next = slice.pop_front().unwrap();
+            match next.as_str() {
+                "COMMA" => break 'condtions,
+                "RPAREN" => break 'slice,
+                "TEXT" | "INTEGER" => tokens.push(Token::Constraint(Constraint::new(next))),
+                "PRIMARY" => {
+                    if slice.front().unwrap().as_str() == "KEY" {
+                        tokens.push(Token::Constraint(Constraint::new(
+                            "PRIMARY KEY".to_string(),
+                        )));
+                        // Consume the following token
+                        slice.pop_front();
+                    } else {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+                    }
                 }
-
-                _ => {}
+                &_ => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+                }
             }
         }
     }
-    vec![]
+
+    if queue.pop_front().unwrap().as_str() == "SEMICOLON" {
+        Ok(tokens)
+    } else {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
 }
 
-fn pop_until(mut queue: VecDeque<String>, value: &str) -> (VecDeque<String>, Vec<String>) {
-    let mut slice: VecDeque<String> = VecDeque::new();
+fn tokenize_insert(mut queue: VecDeque<String>) -> Result<Vec<Token>, io::Error> {
+    let mut tokens: Vec<Token> = vec![];
 
-    for item in queue {
-        if item != value.to_string() {
-            slice.push_back(item);
-        } else {
-            break;
+    //Check the first two tokens
+    let first = queue.pop_front().unwrap();
+    let second = queue.pop_front().unwrap();
+    if first != "INSERT".to_string() || &second != &"INTO".to_string() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
+
+    // Get the table name
+    let token = Token::Keyword(Keyword::new(queue.pop_front().unwrap()));
+    tokens.push(token);
+
+    if queue.pop_front().unwrap().as_str() != "VALUES" {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
+
+    if queue.front().unwrap().as_str() != "LPAREN" {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
+
+    // Get the values
+    // First get everything between the parenthesis
+    let mut slice = pop_until(&mut queue, "RPAREN");
+    'slice: loop {
+        // Discard the item if its the starting paren
+        if slice.front().unwrap().as_str() == "LPAREN" {
+            slice.pop_front();
+            continue 'slice;
+
+        // Consume the token if its a comma
+        } else if slice.front().unwrap().as_str() == "COMMA" {
+            slice.pop_front();
+            continue 'slice;
+        // Break if its the ending paren
+        } else if slice.front().unwrap().as_str() == "RPAREN" {
+            slice.pop_front();
+            break 'slice;
+        }
+
+        if slice.front().unwrap().as_str() == "SINGLEQUOTE" {
+            // Create a subslice of everything between quotes
+            let mut subslice = pop_until(&mut slice, "SINGLEQUOTE");
+            let token = match parse_enclosed_quotes(&mut subslice) {
+                Ok(t) => t,
+                Err(_) => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+                }
+            };
+
+            tokens.push(token);
+            continue 'slice;
+        }
+
+        // Parse as an integer literal if it can be parsed that way
+        if slice.front().unwrap().parse::<c_int>().is_ok() {
+            tokens.push(Token::IntLit(IntLiteral {
+                value: slice.pop_front().unwrap().parse::<c_int>().unwrap(),
+            }));
+            continue 'slice;
         }
     }
 
-    (VecDeque::new(), vec![])
+    if queue.pop_front().unwrap().as_str() == "SEMICOLON" {
+        Ok(tokens)
+    } else {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
+}
+
+fn tokenize_select(mut queue: VecDeque<String>) -> Result<Vec<Token>, io::Error> {
+    let mut tokens: Vec<Token> = vec![];
+
+    //Check the first two tokens
+    let first = queue.pop_front().unwrap();
+    if first != "SELECT".to_string() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    }
+
+    // Get the columns
+    let mut slice = pop_until(&mut queue, "FROM");
+
+    'slice: loop {
+        // Break out when we hit the FROM block
+        // FROM is consumed by the pop_until so it is no longer in the original queue
+        if slice.front().unwrap().as_str() == "FROM" {
+            break 'slice;
+        // If the slice is empty, it means we never hit the FROM block
+        } else if slice.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+        }
+
+        tokens.push(Token::Identifier(Identifier {
+            value: slice.pop_front().unwrap(),
+        }));
+    }
+
+    // Get the table name
+    let token = Token::Identifier(Identifier::new(queue.pop_front().unwrap()));
+    tokens.push(token);
+
+    if queue.front().unwrap().as_str() == "WHERE" {
+        loop {
+            // End of statement
+            if queue.front().unwrap().as_str() == "SEMICOLON" {
+                break;
+            }
+
+            // Push the identifier of the clause
+            if queue.front().unwrap().as_str() == "DOUBLEQUOTE" {
+                // Create a subslice of everything between quotes
+                let mut slice = pop_until(&mut queue, "DOUBLEQUOTE");
+
+                let token = match parse_enclosed_quotes(&mut slice) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+                    }
+                };
+
+                tokens.push(token);
+            }
+
+            // Push the operator of the caluse
+            tokens.push(Token::Symbol(Symbol::new(queue.pop_front().unwrap())));
+
+            // Push the literal
+
+            if slice.front().unwrap().as_str() == "SINGLEQUOTE" {
+                // Create a subslice of everything between quotes
+                let mut slice = pop_until(&mut slice, "SINGLEQUOTE");
+                let token = match parse_enclosed_quotes(&mut slice) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+                    }
+                };
+
+                tokens.push(token);
+            }
+
+            // Parse as an integer literal if it can be parsed that way
+            if slice.front().unwrap().parse::<c_int>().is_ok() {
+                tokens.push(Token::IntLit(IntLiteral {
+                    value: slice.pop_front().unwrap().parse::<c_int>().unwrap(),
+                }));
+            }
+        }
+        Ok(tokens)
+    } else if queue.front().unwrap().as_str() == "SEMICOLON" {
+        Ok(tokens)
+    } else {
+        Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"))
+    }
+}
+
+fn parse_enclosed_quotes(queue_slice: &mut VecDeque<String>) -> Result<Token, io::Error> {
+    let mut quote_type: String = String::new();
+    if queue_slice.front().unwrap().as_str() == "SINGLEQUOTE" {
+        quote_type = "SINGLEQUOTE".to_string();
+    } else if queue_slice.front().unwrap().as_str() == "DOUBLEQUOTE" {
+        quote_type = "DOUBLEQUOTE".to_string();
+    }
+    if queue_slice.front().unwrap().as_str() == quote_type {
+        let mut substring = String::new();
+
+        // Combine everything between quotes into one string
+        loop {
+            // Discard the quotes
+            if queue_slice.front().unwrap().as_str() == quote_type {
+                queue_slice.pop_front();
+                continue;
+            }
+            substring.push_str(queue_slice.pop_front().unwrap().as_str());
+
+            if queue_slice.is_empty() {
+                break;
+            } else {
+                substring.push_str(" ");
+            }
+        }
+
+        if quote_type == "DOUBLEQUOTE" {
+            return Ok(Token::Identifier(Identifier::new(substring)));
+        } else if quote_type == "SINGLEQUOTE" {
+            return Ok(Token::StringLit(StringLiteral::new(substring)));
+        }
+    }
+
+    Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"))
+}
+
+fn pop_until(queue: &mut VecDeque<String>, value: &str) -> VecDeque<String> {
+    let mut slice: VecDeque<String> = VecDeque::new();
+
+    // pop the starting item
+    slice.push_back(queue.pop_front().unwrap());
+
+    while queue.front().unwrap().as_str() != value {
+        // Shift the first value from the queue onto the back of the slice
+        slice.push_back(queue.pop_front().unwrap());
+    }
+
+    // pop the ending item
+    slice.push_back(queue.pop_front().unwrap());
+
+    slice
 }
 
 // TODO: Error Handling
@@ -177,6 +445,7 @@ fn tokenize_non_alphanumeric(characters: &[char], index: &mut usize) -> String {
 enum Token {
     Keyword(Keyword),
     Identifier(Identifier),
+    Constraint(Constraint),
     StringLit(StringLiteral),
     IntLit(IntLiteral),
     Symbol(Symbol),
@@ -187,7 +456,7 @@ struct Keyword {
 }
 
 impl Keyword {
-    fn new(value: String) -> Keyword {
+    pub fn new(value: String) -> Keyword {
         Keyword { value }
     }
 }
@@ -199,6 +468,16 @@ struct Identifier {
 impl Identifier {
     fn new(value: String) -> Identifier {
         Identifier { value }
+    }
+}
+
+struct Constraint {
+    value: String,
+}
+
+impl Constraint {
+    pub fn new(value: String) -> Constraint {
+        Constraint { value }
     }
 }
 
