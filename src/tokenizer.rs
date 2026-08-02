@@ -184,78 +184,20 @@ pub struct SelectStatement {
     clauses: Vec<String>,
 }
 
-impl SelectStatement {
-    fn new() -> SelectStatement {
-        SelectStatement {
-            column_labels: Vec::new(),
-            target: String::new(),
-            clauses: Vec::new(),
-        }
-    }
-
-    pub fn add_column(&mut self, label: &str) {
-        self.column_labels.push(label.to_string());
-    }
-
-    pub fn set_table(&mut self, table: &str) {
-        self.target = table.to_string();
-    }
-
-    pub fn add_clause(&mut self, clause: &str) {
-        self.clauses.push(clause.to_string());
+impl IntLiteral {
+    fn new(value: c_int) -> IntLiteral {
+        IntLiteral { value }
     }
 }
 
-pub struct Column {
-    label: String,
-    column_type: ColumnType,
-    is_primary_key: bool,
-}
-
-pub struct Clause {
-    key: String,
-    operator: String,
+struct Symbol {
     value: String,
 }
 
-impl Clause {
-    pub fn new() -> Clause {
-        Clause {
-            key: String::new(),
-            operator: String::new(),
-            value: String::new(),
-        }
+impl Symbol {
+    fn new(value: String) -> Symbol {
+        Symbol { value }
     }
-
-    pub fn set_key(&mut self, key: &str) {
-        self.key = key.to_string();
-    }
-
-    pub fn set_operator(&mut self, operator: &str) {
-        self.operator = operator.to_string();
-    }
-
-    pub fn set_value(&mut self, value: &str) {
-        self.value = value.to_string();
-    }
-}
-
-pub enum ColumnType {
-    TEXT,
-    INTEGER,
-}
-
-pub enum Statement {
-    CREATE(CreateStatement),
-    INSERT(InsertStatement),
-    SELECT(SelectStatement),
-}
-
-pub enum TokenType {
-    KEYWORD,
-    IDENTIFIER,
-    LITERAL,
-    PUNCTUATION,
 }
 
 #[cfg(test)]
@@ -265,59 +207,131 @@ mod tests {
     #[test]
     fn test_prefix_split() {
         assert_eq!(
-            convert_strings(vec!["#abc", "{def"]),
-            vec!["#", "abc", "{", "def"]
+            seperate_tokens("*abc -def").unwrap(),
+            vec!["STAR", "abc", "MINUS", "def"]
         )
     }
 
     #[test]
     fn test_suffix_split() {
         assert_eq!(
-            convert_strings(vec!["abc#", "def)"]),
-            vec!["abc", "#", "def", ")"]
+            seperate_tokens("abc+ def)").unwrap(),
+            vec!["abc", "PLUS", "def", "RPAREN"]
         )
     }
 
     #[test]
     fn test_prefix_and_suffix_split() {
         assert_eq!(
-            convert_strings(vec!["(xyz)", "(abc,"]),
-            vec!["(", "xyz", ")", "(", "abc", ","]
+            seperate_tokens("(xyz) (abc,").unwrap(),
+            vec!["LPAREN", "xyz", "RPAREN", "LPAREN", "abc", "COMMA"]
         )
     }
 
     #[test]
     fn mixed_alphanumeric_no_split() {
-        assert_eq!(convert_strings(vec!["123abc"]), vec!["123abc"]);
+        assert_eq!(seperate_tokens("123abc").unwrap(), vec!["123abc"]);
     }
 
     #[test]
     fn test_numeric_with_suffix() {
         assert_eq!(
-            convert_strings(vec!["(123)", "(123abc"]),
-            vec!["(", "123", ")", "(", "123abc"]
+            seperate_tokens("(123) (123abc").unwrap(),
+            vec!["LPAREN", "123", "RPAREN", "LPAREN", "123abc"]
         )
     }
 
     #[test]
     fn test_long_command() {
         assert_eq!(
-            convert_strings(vec![
+            seperate_tokens("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);")
+                .unwrap(),
+            vec![
                 "CREATE",
                 "TABLE",
                 "users",
-                "(id",
+                "LPAREN",
+                "id",
                 "INTEGER",
                 "PRIMARY",
-                "KEY,",
+                "KEY",
+                "COMMA",
                 "name",
-                "TEXT,",
+                "TEXT",
+                "COMMA",
                 "age",
-                "INTEGER);"
-            ]),
+                "INTEGER",
+                "RPAREN",
+                "SEMICOLON"
+            ]
+        )
+    }
+
+    #[test]
+    fn test_full_insert_command() {
+        assert_eq!(
+            seperate_tokens("INSERT INTO users VALUES (1, 'daniel', 24);").unwrap(),
             vec![
-                "CREATE", "TABLE", "users", "(", "id", "INTEGER", "PRIMARY", "KEY", ",", "name",
-                "TEXT", ",", "age", "INTEGER", ")", ";"
+                "INSERT",
+                "INTO",
+                "users",
+                "VALUES",
+                "LPAREN",
+                "1",
+                "COMMA",
+                "SINGLEQUOTE",
+                "daniel",
+                "SINGLEQUOTE",
+                "COMMA",
+                "24",
+                "RPAREN",
+                "SEMICOLON"
+            ]
+        )
+    }
+
+    #[test]
+    fn test_full_select_command_with_wildcard() {
+        assert_eq!(
+            seperate_tokens("SELECT * FROM users;").unwrap(),
+            vec!["SELECT", "STAR", "FROM", "users", "SEMICOLON"]
+        )
+    }
+
+    #[test]
+    fn test_full_select_command_with_columns_and_clause() {
+        assert_eq!(
+            seperate_tokens("SELECT name, age FROM users WHERE id = 1;").unwrap(),
+            vec![
+                "SELECT",
+                "name",
+                "COMMA",
+                "age",
+                "FROM",
+                "users",
+                "WHERE",
+                "id",
+                "EQUALS",
+                "1",
+                "SEMICOLON"
+            ]
+        )
+    }
+
+    #[test]
+    fn test_full_select_command_with_wildcard_and_clause() {
+        assert_eq!(
+            seperate_tokens("SELECT * FROM users WHERE age > 20;").unwrap(),
+            vec![
+                "SELECT",
+                "STAR",
+                "FROM",
+                "users",
+                "WHERE",
+                "age",
+                "GREATERTHAN",
+                "20",
+                "SEMICOLON"
             ]
         )
     }
