@@ -3,6 +3,8 @@ mod tokenizer;
 
 use std::io::{self, Write};
 
+use crate::tokenizer::Token;
+
 pub fn print_prompt() {
     print!("dbms >");
     io::stdout().flush().unwrap(); // Flush the stdout so the print! actually shows up.
@@ -19,8 +21,8 @@ pub fn get_input() -> String {
 }
 
 pub fn evaluate_query(query: &str) {
-    let seperated_strings: Vec<String> = tokenizer::seperate_tokens(query).unwrap();
-    let command = parser::parse_tokens(&tokens).unwrap();
+    let seperated_strings: Vec<Token> = tokenizer::tokenize(query).unwrap();
+    // let command = parser::parse_tokens(seperated_strings).unwrap();
 }
 
 #[derive(Debug)]
