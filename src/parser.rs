@@ -109,7 +109,7 @@ fn build_create_tree(queue: &mut VecDeque<Token>) -> Result<CreateNode, io::Erro
     }
 
     let table_node = IdentifierNode {
-        value: table_token.string_value().to_string(),
+        identifier: table_token.string_value().to_string(),
     };
 
     let root: CreateNode = CreateNode {
@@ -176,51 +176,62 @@ impl PrintType for Node {
 }
 
 pub struct CreateNode {
-    table: IdentifierNode,
-    children: Vec<ColumnNode>,
+    pub table: IdentifierNode,
+    pub children: Vec<ColumnNode>,
 }
 
 pub struct SelectNode {
-    columns: Vec<IdentifierNode>,
-    child: Box<Node>,
+    pub columns: Vec<IdentifierNode>,
+    pub child: Box<Node>,
 }
+
 pub struct InsertNode {
-    table: IdentifierNode,
-    child: Box<Node>,
+    pub table: IdentifierNode,
+    pub child: Box<Node>,
 }
+
 pub struct ValuesNode {
-    values: Vec<Node>,
+    pub values: Vec<Node>,
 }
+
 pub struct FromNode {
-    table: IdentifierNode,
-    children: Vec<Node>,
+    pub table: IdentifierNode,
+    pub children: Vec<Node>,
 }
+
 pub struct WhereNode {
-    conditions: Vec<Node>,
+    pub conditions: Vec<Node>,
 }
+
 pub struct ColumnNode {
-    column_name: String,
-    constraints: Vec<ConstraintNode>,
+    pub column_name: String,
+    pub constraints: Vec<ConstraintNode>,
 }
+
 pub struct ConstraintNode {
-    value: String,
+    pub value: String,
 }
+
 pub struct IdentifierNode {
-    value: String,
+    pub identifier: String,
 }
+
 pub struct StringLiteralNode {
-    value: String,
+    pub value: String,
 }
+
 pub struct IntegerLiteralNode {
-    value: c_int,
+    pub value: c_int,
 }
+
 pub struct ConditionNode {
-    left: IdentifierNode,
-    operator: OperatorNode,
-    right: Box<Node>,
+    pub left: IdentifierNode,
+    pub operator: OperatorNode,
+    pub right: Box<Node>,
 }
+
 pub struct OperatorNode {
-    operator: String,
+    pub operator: String,
 }
 
 #[cfg(test)]
@@ -259,6 +270,46 @@ mod tests {
             }),
         ];
 
-        assert_eq!(create_ast(command).unwrap().get_type(), "CREATE");
+        let completed_tree = create_ast(command).unwrap();
+
+        let RootNode::Create(node) = completed_tree else {
+            panic!("Expected a CREATE node, got something else");
+        };
+
+        assert_eq!(node.table.identifier, "users");
+        assert_eq!(node.children[0].column_name, "id");
+    }
+
+    fn test_create_syntax_checking() {
+        let command: Vec<Token> = vec![
+            Token::Keyword(Keyword {
+                value: "CREATE".to_string(),
+            }),
+            Token::Keyword(Keyword {
+                value: "TABLE".to_string(),
+            }),
+            Token::Identifier(Identifier {
+                value: "users".to_string(),
+            }),
+            Token::Keyword(Keyword {
+                value: "VALUES".to_string(),
+            }),
+            Token::Symbol(Symbol {
+                value: "LPAREN".to_string(),
+            }),
+            Token::Identifier(Identifier {
+                value: "id".to_string(),
+            }),
+            Token::Symbol(Symbol {
+                value: "RPAREN".to_string(),
+            }),
+            Token::Symbol(Symbol {
+                value: "SEMICOLON".to_string(),
+            }),
+        ];
+
+        let missing_create = Vec::from(command[1..]);
+
+        let test = create_ast(missing_create).expect("Create Failed");
     }
 }
