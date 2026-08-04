@@ -1,10 +1,21 @@
-use std::io;
+use std::{collections::VecDeque, io, os::raw::c_int};
 
-pub fn parse_tokens(input: Vec<String>) -> Result<Statement, io::Error> {
-    let statement: Statement = match input[0].as_str() {
-        "SELECT" => Statement::Select(parse_select(input).unwrap()),
-        "INSERT" => Statement::Insert(parse_insert(input).unwrap()),
-        "CREATE" => Statement::Create(parse_create(input).unwrap()),
+use crate::tokenizer::Token;
+
+pub fn create_ast(input: Vec<Token>) -> Result<RootNode, io::Error> {
+    let syntax_error: io::Error = io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error");
+    // Convert to a dequeue
+    let mut token_queue = VecDeque::from(input);
+    let root: RootNode = match token_queue.pop_front().unwrap() {
+        Token::Keyword(t) => match t.value() {
+            "CREATE" => RootNode::Create(build_create_tree(&mut token_queue).unwrap()),
+            // "SELECT" => build_select_tree(&mut token_queue).unwrap(),
+            // "INSERT" => build_insert_tree(&mut token_queue).unwrap(),
+            _ => {
+                println!("Error in CREATE");
+                return Err(syntax_error);
+            }
+        },
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -13,172 +24,241 @@ pub fn parse_tokens(input: Vec<String>) -> Result<Statement, io::Error> {
         }
     };
 
-    Ok(statement)
+    Ok(root)
 }
 
-fn parse_select(input: Vec<String>) -> Result<SelectStatement, io::Error> {
-    let mut statement: SelectStatement = SelectStatement::new();
+fn build_create_tree(queue: &mut VecDeque<Token>) -> Result<CreateNode, io::Error> {
+    let syntax_error = Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+    // Double check that the next is TABLE then pop it off
 
-    let mut statement_section = "columns";
-    let mut current_clause: Clause = Clause::new();
-    let mut index: usize = 0;
+    if queue.pop_front().unwrap().string_value() != "TABLE" {
+        println!("Error in TABLE");
+        return syntax_error;
+    }
+    // Grab the next token as the table name
+    let table_token = queue.pop_front().unwrap();
 
-    while index < input.len() {
-        let token: &str = input[index].as_str();
-        match statement_section {
-            "columns" => {
-                if token == "FROM" {
-                    statement_section = "table";
-                    index += 1;
-                    continue;
-                } else {
-                    statement.add_target_column(token);
-                    index += 1;
-                    continue;
-                }
-            }
-            "table" => {
-                if token == "WHERE" {
-                    statement_section = "clauses";
-                    index += 1;
-                    continue;
-                } else {
-                    statement.set_target_table(token);
-                    index += 1;
-                    continue;
-                }
-            }
-            "clauses" => {
-                while input[index] != "SEMICOLON" && index < input.len() {
-                    current_clause.set_left(input[index].as_str());
-                    current_clause.set_operator(input[index + 1].as_str());
-                    current_clause.set_right(input[index + 2].as_str());
+    // Make sure the next token is VALUES and discard
+    if queue.pop_front().unwrap().string_value() != "VALUES" {
+        println!("Error in VALUES");
+        return syntax_error;
+    }
 
-                    statement.add_clause(current_clause);
-                    current_clause = Clause::new();
+    // Check that an LPAREN is next then discard
+    if queue.pop_front().unwrap().string_value() != "LPAREN" {
+        println!("Error in LPAREN");
+        return syntax_error;
+    }
 
-                    index += 3;
-                }
+    let mut columns: Vec<(Token, Vec<Option<Token>>)> = vec![];
+
+    // Loop over remaining tokens
+    'columns: loop {
+        // Break if we hit an RPAREN
+        if queue.is_empty() || queue.front().unwrap().string_value() == "RPAREN" {
+            break 'columns;
+        }
+
+        // First token is column
+        let column_token = queue.pop_front().unwrap();
+        // Loop until a commma or an RPAREN
+        let mut conditions: Vec<Option<Token>> = vec![];
+        'conditions: loop {
+            if queue.is_empty() {
+                println!("Error in CONDITIONS");
+                return syntax_error;
             }
-            _ => {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
+            if queue.front().unwrap().string_value() == "RPAREN"
+                || queue.front().unwrap().string_value() == "COMMA"
+            {
+                break 'conditions;
             }
+            // TODO: Handle compound conditions
+
+            // Any remaining tokens are conditions
+            conditions.push(Some(queue.pop_front().unwrap()));
+        }
+
+        columns.push((column_token, conditions));
+    }
+
+    // Consume the RPAREN
+    queue.pop_front();
+
+    // Check that it ends with SEMICOLON
+    if queue.pop_front().unwrap().string_value() != "SEMICOLON" {
+        println!("Error in SEMICOLON");
+        return syntax_error;
+    }
+
+    // Construct the tree from bottom up.
+    let mut column_nodes: Vec<ColumnNode> = vec![];
+    for col in columns {
+        let mut constraint_nodes: Vec<ConstraintNode> = vec![];
+        for constraint in col.1 {
+            constraint_nodes.push(ConstraintNode {
+                value: constraint.unwrap().string_value().to_string(),
+            });
+        }
+        let node = ColumnNode {
+            column_name: col.0.string_value().to_string(),
+            constraints: constraint_nodes,
+        };
+
+        column_nodes.push(node);
+    }
+
+    let table_node = IdentifierNode {
+        value: table_token.string_value().to_string(),
+    };
+
+    let root: CreateNode = CreateNode {
+        table: table_node,
+        children: column_nodes,
+    };
+
+    // Return the tree
+    Ok(root)
+}
+
+// fn build_select_tree(queue: &mut VecDeque<Token>) -> Result<Node, io::Error> {}
+//
+// fn build_insert_tree(queue: &mut VecDeque<Token>) -> Result<Node, io::Error> {}
+
+trait PrintType {
+    fn get_type(&self) -> &str;
+}
+
+pub enum RootNode {
+    Create(CreateNode),
+    Select(SelectNode),
+    Insert(InsertNode),
+}
+
+impl PrintType for RootNode {
+    fn get_type(&self) -> &str {
+        match self {
+            RootNode::Create(_) => "CREATE",
+            RootNode::Select(_) => "SELECT",
+            RootNode::Insert(_) => "INSERT",
         }
     }
-
-    Ok(statement)
 }
 
-fn parse_insert(input: Vec<String>) -> Result<InsertStatement, io::Error> {
-    let mut statement: InsertStatement = InsertStatement::new();
-
-    Ok(statement)
+pub enum Node {
+    Values(ValuesNode),
+    From(FromNode),
+    Where(WhereNode),
+    Column(ColumnNode),
+    Constraint(ConstraintNode),
+    Identifier(IdentifierNode),
+    StringLiteral(StringLiteralNode),
+    IntegerLiteral(IntegerLiteralNode),
+    Condition(ConditionNode),
+    Operator(OperatorNode),
 }
 
-fn parse_create(input: Vec<String>) -> Result<CreateStatement, io::Error> {
-    let mut statement: CreateStatement = CreateStatement::new();
-
-    Ok(statement)
-}
-
-pub enum Statement {
-    Select(SelectStatement),
-    Insert(InsertStatement),
-    Create(CreateStatement),
-}
-
-#[derive(Debug, PartialEq)]
-struct SelectStatement {
-    target_table: String,
-    target_columns: Vec<String>,
-    clauses: Option<Vec<Clause>>,
-}
-
-impl SelectStatement {
-    // Create an empty statement
-    pub fn new() -> SelectStatement {
-        SelectStatement {
-            target_table: String::new(),
-            target_columns: vec![],
-            clauses: None,
+impl PrintType for Node {
+    fn get_type(&self) -> &str {
+        match self {
+            Node::Values(_) => "VALUES",
+            Node::From(_) => "FROM",
+            Node::Where(_) => "WHERE",
+            Node::Column(_) => "COLUMN",
+            Node::Constraint(_) => "CONSTRAINT",
+            Node::Identifier(_) => "IDENTIFIER",
+            Node::StringLiteral(_) => "STRINGLITERAL",
+            Node::IntegerLiteral(_) => "INTEGERLITERAL",
+            Node::Condition(_) => "CONDIITON",
+            Node::Operator(_) => "OPERATOR",
         }
     }
-
-    pub fn set_target_table(&mut self, target: &str) {
-        self.target_table = String::from(target);
-    }
-
-    pub fn add_target_column(&mut self, target_column: &str) {
-        self.target_columns.push(String::from(target_column));
-    }
-
-    pub fn add_clause(&mut self, clause: Clause) {
-        // Initialize if its none
-        if self.clauses.is_none() {
-            self.clauses = Some(vec![]);
-        }
-        self.clauses.as_mut().unwrap().push(clause);
-    }
 }
 
-struct InsertStatement();
-
-impl InsertStatement {
-    pub fn new() -> InsertStatement {
-        InsertStatement {}
-    }
-}
-struct CreateStatement();
-
-impl CreateStatement {
-    pub fn new() -> CreateStatement {
-        CreateStatement {}
-    }
+pub struct CreateNode {
+    table: IdentifierNode,
+    children: Vec<ColumnNode>,
 }
 
-#[derive(Debug, PartialEq)]
-struct Clause {
-    clause_type: ClauseType,
-    left: String,
-    operator: Option<String>,
-    right: Option<String>,
+pub struct SelectNode {
+    columns: Vec<IdentifierNode>,
+    child: Box<Node>,
+}
+pub struct InsertNode {
+    table: IdentifierNode,
+    child: Box<Node>,
+}
+pub struct ValuesNode {
+    values: Vec<Node>,
+}
+pub struct FromNode {
+    table: IdentifierNode,
+    children: Vec<Node>,
+}
+pub struct WhereNode {
+    conditions: Vec<Node>,
+}
+pub struct ColumnNode {
+    column_name: String,
+    constraints: Vec<ConstraintNode>,
+}
+pub struct ConstraintNode {
+    value: String,
+}
+pub struct IdentifierNode {
+    value: String,
+}
+pub struct StringLiteralNode {
+    value: String,
+}
+pub struct IntegerLiteralNode {
+    value: c_int,
+}
+pub struct ConditionNode {
+    left: IdentifierNode,
+    operator: OperatorNode,
+    right: Box<Node>,
+}
+pub struct OperatorNode {
+    operator: String,
 }
 
-impl Clause {
-    pub fn new() -> Clause {
-        Clause {
-            clause_type: ClauseType::WHERE,
-            left: String::new(),
-            operator: None,
-            right: None,
-        }
-    }
+#[cfg(test)]
+mod tests {
+    use crate::tokenizer::{Identifier, Keyword, Symbol};
 
-    pub fn set_left(&mut self, left: &str) {
-        self.left = left.to_string();
-    }
+    use super::*;
 
-    pub fn set_operator(&mut self, op: &str) {
-        self.operator = Some(op.to_string());
-    }
+    #[test]
 
-    pub fn set_right(&mut self, right: &str) {
-        self.right = Some(right.to_string());
+    fn test_simple_create() {
+        let command: Vec<Token> = vec![
+            Token::Keyword(Keyword {
+                value: "CREATE".to_string(),
+            }),
+            Token::Keyword(Keyword {
+                value: "TABLE".to_string(),
+            }),
+            Token::Identifier(Identifier {
+                value: "users".to_string(),
+            }),
+            Token::Keyword(Keyword {
+                value: "VALUES".to_string(),
+            }),
+            Token::Symbol(Symbol {
+                value: "LPAREN".to_string(),
+            }),
+            Token::Identifier(Identifier {
+                value: "id".to_string(),
+            }),
+            Token::Symbol(Symbol {
+                value: "RPAREN".to_string(),
+            }),
+            Token::Symbol(Symbol {
+                value: "SEMICOLON".to_string(),
+            }),
+        ];
+
+        assert_eq!(create_ast(command).unwrap().get_type(), "CREATE");
     }
 }
-
-impl Default for Clause {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum ClauseType {
-    WHERE,
-}
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-// }
