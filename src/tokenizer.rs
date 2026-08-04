@@ -77,7 +77,7 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
                 }
             }
 
-            let token = Token::StringLit(StringLiteral {
+            let token = Token::StringLiteral(StringLiteral {
                 value: current_string,
             });
 
@@ -157,7 +157,7 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
                 // Construct the token
                 // Verify its a valid c_int and construct a token
                 let token = match current_string.parse::<c_int>() {
-                    Ok(int) => Token::IntLit(IntLiteral { value: int }),
+                    Ok(int) => Token::IntLiteral(IntLiteral { value: int }),
                     Err(_) => {
                         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
                     }
@@ -271,9 +271,30 @@ fn tokenize_symbol(characters: &mut VecDeque<char>) -> String {
 pub enum Token {
     Keyword(Keyword),
     Identifier(Identifier),
-    StringLit(StringLiteral),
-    IntLit(IntLiteral),
+    StringLiteral(StringLiteral),
+    IntLiteral(IntLiteral),
     Symbol(Symbol),
+    Operator(Operator),
+}
+
+impl Token {
+    pub fn int_value(&self) -> i32 {
+        match self {
+            Token::IntLiteral(t) => *t.value(),
+            _ => 0,
+        }
+    }
+
+    pub fn string_value(&self) -> &str {
+        match self {
+            Token::Keyword(t) => t.value(),
+            Token::Identifier(t) => t.value(),
+            Token::StringLiteral(t) => t.value(),
+            Token::Symbol(t) => t.value(),
+            Token::Operator(t) => t.value(),
+            _ => "",
+        }
+    }
 }
 
 impl fmt::Display for Token {
@@ -281,36 +302,78 @@ impl fmt::Display for Token {
         match self {
             Token::Keyword(_) => write!(f, "Keyword"),
             Token::Identifier(_) => write!(f, "Identifier"),
-            Token::StringLit(_) => write!(f, "StringLit"),
-            Token::IntLit(_) => write!(f, "IntLit"),
+            Token::StringLiteral(_) => write!(f, "StringLiteral"),
+            Token::IntLiteral(_) => write!(f, "IntLiteral"),
             Token::Symbol(_) => write!(f, "Symbol"),
+            Token::Operator(_) => write!(f, "Operator"),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Keyword {
-    value: String,
+    pub value: String,
+}
+
+impl Keyword {
+    pub fn value(&self) -> &str {
+        &self.value.as_str()
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Identifier {
-    value: String,
+    pub value: String,
+}
+
+impl Identifier {
+    fn value(&self) -> &String {
+        &self.value
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct StringLiteral {
-    value: String,
+    pub value: String,
+}
+
+impl StringLiteral {
+    fn value(&self) -> &String {
+        &self.value
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct IntLiteral {
-    value: c_int,
+    pub value: c_int,
+}
+
+impl IntLiteral {
+    fn value(&self) -> &c_int {
+        &self.value
+    }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Symbol {
-    value: String,
+    pub value: String,
+}
+
+impl Symbol {
+    fn value(&self) -> &String {
+        &self.value
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Operator {
+    pub value: String,
+}
+
+impl Operator {
+    fn value(&self) -> &String {
+        &self.value
+    }
 }
 
 #[cfg(test)]
@@ -351,7 +414,7 @@ mod tests {
     fn test_string_literal() {
         assert_eq!(
             tokenize("\'abc\'").unwrap(),
-            vec![Token::StringLit(StringLiteral {
+            vec![Token::StringLiteral(StringLiteral {
                 value: "abc".to_string()
             })]
         );
@@ -361,7 +424,7 @@ mod tests {
     fn test_int_literal() {
         assert_eq!(
             tokenize("123").unwrap(),
-            vec![Token::IntLit(IntLiteral { value: 123 })]
+            vec![Token::IntLiteral(IntLiteral { value: 123 })]
         )
     }
 
@@ -430,12 +493,12 @@ mod tests {
         assert_eq!(
             tokenize("123 'abc' 456 'def'").unwrap(),
             vec![
-                Token::IntLit(IntLiteral { value: 123 }),
-                Token::StringLit(StringLiteral {
+                Token::IntLiteral(IntLiteral { value: 123 }),
+                Token::StringLiteral(StringLiteral {
                     value: "abc".to_string()
                 }),
-                Token::IntLit(IntLiteral { value: 456 }),
-                Token::StringLit(StringLiteral {
+                Token::IntLiteral(IntLiteral { value: 456 }),
+                Token::StringLiteral(StringLiteral {
                     value: "def".to_string()
                 })
             ]
@@ -450,13 +513,13 @@ mod tests {
                 Token::Identifier(Identifier {
                     value: "abc".to_string()
                 }),
-                Token::StringLit(StringLiteral {
+                Token::StringLiteral(StringLiteral {
                     value: "def".to_string()
                 }),
                 Token::Identifier(Identifier {
                     value: "ghi".to_string()
                 }),
-                Token::StringLit(StringLiteral {
+                Token::StringLiteral(StringLiteral {
                     value: "jkl".to_string()
                 }),
             ]
