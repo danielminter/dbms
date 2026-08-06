@@ -5,39 +5,33 @@ use std::{
     io::{self},
 };
 
-pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
+pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
     // convert_strings(split_text)
     let mut tokens: Vec<Token> = vec![];
     let mut characters: VecDeque<char> = text.chars().collect();
-    println!("Function Start");
 
     // Main parsing loop
     'parsing: while !characters.is_empty() {
         //  Peek at the next character
         let mut next_char = *characters.front().unwrap();
-        println!("Next character: {}", next_char);
 
         // Skip over white space
         if char::is_whitespace(next_char) {
-            println!("Skipping white space");
             characters.pop_front();
             continue 'parsing;
         }
 
         // Special Cases for items in double quotes
         if next_char == '\"' {
-            println!("Double quotes found");
             // Initialize a new token
             let mut current_string: String = String::new();
 
             // Drop the starting quote
-            println!("Dropping {}", next_char);
             characters.pop_front();
 
             next_char = *characters.front().unwrap();
 
             while !characters.is_empty() && next_char != '\"' {
-                println!("Pushing {}", next_char);
                 current_string.push(characters.pop_front().unwrap());
                 if !characters.is_empty() {
                     next_char = *characters.front().unwrap();
@@ -61,7 +55,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
 
         // Special Case for items in single quotes
         if next_char == '\'' {
-            println!("Single quotes found");
             // Initialize a new token
             let mut current_string: String = String::new();
 
@@ -70,7 +63,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
             next_char = *characters.front().unwrap();
 
             while !characters.is_empty() && next_char != '\'' {
-                println!("Pushing {}", next_char);
                 current_string.push(characters.pop_front().unwrap());
                 if !characters.is_empty() {
                     next_char = *characters.front().unwrap();
@@ -101,7 +93,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
                 // Parse it as a keyword if its in Caps
                 //Build the current token with all consecutive caps characters
                 while !characters.is_empty() && char::is_uppercase(next_char) {
-                    println!("Pushing {}", next_char);
                     current_string.push(characters.pop_front().unwrap());
 
                     if !characters.is_empty() {
@@ -115,7 +106,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
                 });
 
                 // Push it onto our vector
-                println!("{}", token);
                 tokens.push(token);
 
                 continue 'parsing;
@@ -123,7 +113,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
                 // If not the above, parse as an identifier
                 //Build the current token with all consecutive non-caps characters
                 while !characters.is_empty() && char::is_alphabetic(next_char) {
-                    println!("Pushing {}", next_char);
                     current_string.push(characters.pop_front().unwrap());
                     if !characters.is_empty() {
                         next_char = *characters.front().unwrap();
@@ -148,7 +137,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
             if char::is_digit(next_char, 10) {
                 // Try and parse it as a integer literal
                 while !characters.is_empty() && char::is_digit(next_char, 10) {
-                    println!("Pushing {}", next_char);
                     current_string.push(characters.pop_front().unwrap());
                     if !characters.is_empty() {
                         next_char = *characters.front().unwrap();
@@ -174,7 +162,6 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
             // Numeric but not a digit, parse as a symbol
             while !characters.is_empty() && char::is_ascii_punctuation(&next_char) {
                 current_string = tokenize_symbol(&mut characters);
-                println!("String after parsing symbol: {}", current_string);
 
                 if !characters.is_empty() {
                     next_char = *characters.front().unwrap();
@@ -192,11 +179,10 @@ pub fn tokenize(text: &str) -> Result<Vec<Token>, io::Error> {
         }
 
         // Consume the character if it hasn't been caught by anything
-        println!("Nothing caught");
         characters.pop_front();
     }
 
-    Ok(tokens)
+    Ok(TokenQueue::new(tokens))
 }
 
 fn tokenize_symbol(characters: &mut VecDeque<char>) -> String {
@@ -255,9 +241,7 @@ fn tokenize_symbol(characters: &mut VecDeque<char>) -> String {
     }
 
     fn append_equals(characters: &mut VecDeque<char>, current_string: &mut String) {
-        println!("String before: {}", current_string);
         current_string.push_str("EQUAL");
-        println!("String after: {}", current_string);
 
         // Consume the equals
         characters.pop_front();
@@ -267,7 +251,62 @@ fn tokenize_symbol(characters: &mut VecDeque<char>) -> String {
     current_string
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
+pub struct TokenQueue {
+    tokens: VecDeque<Token>,
+}
+
+impl TokenQueue {
+    pub fn has_tokens(&self) -> bool {
+        !self.tokens.is_empty()
+    }
+
+    pub fn new(token_vec: Vec<Token>) -> TokenQueue {
+        TokenQueue {
+            tokens: VecDeque::from(token_vec),
+        }
+    }
+
+    pub fn peek_and_check_value(&self, value: Vec<&str>) -> bool {
+        match self.peek() {
+            Some(t) => value.contains(&t.string_value()),
+            None => false,
+        }
+    }
+
+    pub fn pop_and_check_value(&mut self, value: Vec<&str>) -> Option<Token> {
+        let token: Option<&Token> = self.peek();
+
+        match token {
+            Some(t) => {
+                if value.contains(&t.string_value()) {
+                    self.next()
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
+    pub fn peek(&self) -> Option<&Token> {
+        if !self.tokens.is_empty() {
+            Some(self.tokens.front().unwrap())
+        } else {
+            None
+        }
+    }
+
+    pub fn next(&mut self) -> Option<Token> {
+        if !self.tokens.is_empty() {
+            Some(self.tokens.pop_front().unwrap())
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Keyword(Keyword),
     Identifier(Identifier),
@@ -297,20 +336,7 @@ impl Token {
     }
 }
 
-impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Token::Keyword(_) => write!(f, "Keyword"),
-            Token::Identifier(_) => write!(f, "Identifier"),
-            Token::StringLiteral(_) => write!(f, "StringLiteral"),
-            Token::IntLiteral(_) => write!(f, "IntLiteral"),
-            Token::Symbol(_) => write!(f, "Symbol"),
-            Token::Operator(_) => write!(f, "Operator"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Keyword {
     pub value: String,
 }
@@ -321,18 +347,18 @@ impl Keyword {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Identifier {
     pub value: String,
 }
 
 impl Identifier {
-    fn value(&self) -> &String {
+    pub fn value(&self) -> &String {
         &self.value
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct StringLiteral {
     pub value: String,
 }
@@ -343,7 +369,7 @@ impl StringLiteral {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct IntLiteral {
     pub value: c_int,
 }
@@ -354,7 +380,7 @@ impl IntLiteral {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Symbol {
     pub value: String,
 }
@@ -365,7 +391,7 @@ impl Symbol {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Operator {
     pub value: String,
 }
@@ -384,9 +410,9 @@ mod tests {
     fn test_keyword() {
         assert_eq!(
             tokenize("INSERT").unwrap(),
-            vec![Token::Keyword(Keyword {
+            TokenQueue::new(vec![Token::Keyword(Keyword {
                 value: "INSERT".to_string()
-            })]
+            })],)
         )
     }
 
@@ -394,9 +420,9 @@ mod tests {
     fn test_no_quote_identifier() {
         assert_eq!(
             tokenize("abc").unwrap(),
-            vec![Token::Identifier(Identifier {
+            TokenQueue::new(vec![Token::Identifier(Identifier {
                 value: "abc".to_string()
-            })]
+            })])
         )
     }
 
@@ -404,9 +430,9 @@ mod tests {
     fn test_quoted_identifier() {
         assert_eq!(
             tokenize("\"two words\"").unwrap(),
-            vec![Token::Identifier(Identifier {
+            TokenQueue::new(vec![Token::Identifier(Identifier {
                 value: "two words".to_string()
-            })]
+            })])
         )
     }
 
@@ -414,17 +440,17 @@ mod tests {
     fn test_string_literal() {
         assert_eq!(
             tokenize("\'abc\'").unwrap(),
-            vec![Token::StringLiteral(StringLiteral {
+            TokenQueue::new(vec![Token::StringLiteral(StringLiteral {
                 value: "abc".to_string()
-            })]
-        );
+            })])
+        )
     }
 
     #[test]
     fn test_int_literal() {
         assert_eq!(
             tokenize("123").unwrap(),
-            vec![Token::IntLiteral(IntLiteral { value: 123 })]
+            TokenQueue::new(vec![Token::IntLiteral(IntLiteral { value: 123 })])
         )
     }
 
@@ -432,7 +458,7 @@ mod tests {
     fn test_symbols() {
         assert_eq!(
             tokenize("< > ( ) * , = + - ; ").unwrap(),
-            vec![
+            TokenQueue::new(vec![
                 Token::Symbol(Symbol {
                     value: "LESSTHAN".to_string()
                 }),
@@ -463,7 +489,7 @@ mod tests {
                 Token::Symbol(Symbol {
                     value: "SEMICOLON".to_string()
                 }),
-            ]
+            ])
         )
     }
 
@@ -471,7 +497,7 @@ mod tests {
     fn test_compound_symbols() {
         assert_eq!(
             tokenize("<= >= += -=").unwrap(),
-            vec![
+            TokenQueue::new(vec![
                 Token::Symbol(Symbol {
                     value: "LESSTHANEQUAL".to_string()
                 }),
@@ -484,7 +510,7 @@ mod tests {
                 Token::Symbol(Symbol {
                     value: "MINUSEQUAL".to_string()
                 }),
-            ]
+            ])
         )
     }
 
@@ -492,7 +518,7 @@ mod tests {
     fn test_mixed_literals() {
         assert_eq!(
             tokenize("123 'abc' 456 'def'").unwrap(),
-            vec![
+            TokenQueue::new(vec![
                 Token::IntLiteral(IntLiteral { value: 123 }),
                 Token::StringLiteral(StringLiteral {
                     value: "abc".to_string()
@@ -501,7 +527,7 @@ mod tests {
                 Token::StringLiteral(StringLiteral {
                     value: "def".to_string()
                 })
-            ]
+            ])
         )
     }
 
@@ -509,7 +535,7 @@ mod tests {
     fn test_mixed_quotes() {
         assert_eq!(
             tokenize("\"abc\" 'def' \"ghi\" 'jkl'").unwrap(),
-            vec![
+            TokenQueue::new(vec![
                 Token::Identifier(Identifier {
                     value: "abc".to_string()
                 }),
@@ -522,7 +548,7 @@ mod tests {
                 Token::StringLiteral(StringLiteral {
                     value: "jkl".to_string()
                 }),
-            ]
+            ])
         )
     }
 }
