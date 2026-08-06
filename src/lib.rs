@@ -1,3 +1,4 @@
+pub mod errors;
 mod parser;
 mod tokenizer;
 
@@ -22,7 +23,7 @@ pub fn get_input() -> String {
 
 pub fn evaluate_query(query: &str) {
     let tokens: Vec<Token> = tokenizer::tokenize(query).unwrap();
-    // let ast = parser::parse_tokens(seperated_strings).unwrap();
+    let ast = parser::create_ast(tokens).unwrap();
 }
 
 #[derive(Debug)]
