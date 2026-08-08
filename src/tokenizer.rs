@@ -250,7 +250,7 @@ fn tokenize_symbol(characters: &mut VecDeque<char>) -> String {
     current_string
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub struct TokenQueue {
     tokens: VecDeque<Token>,
 }
@@ -274,9 +274,7 @@ impl TokenQueue {
     }
 
     pub fn pop_and_check_value(&mut self, value: Vec<&str>) -> Option<Token> {
-        let token: Option<&Token> = self.peek();
-
-        match token {
+        match self.peek() {
             Some(t) => {
                 if value.contains(&t.string_value()) {
                     self.next()
@@ -301,6 +299,13 @@ impl TokenQueue {
             Some(self.tokens.pop_front()?)
         } else {
             None
+        }
+    }
+
+    pub fn print_queue(&self) {
+        for tok in &self.tokens {
+            let value = tok.string_value();
+            println!("{value}");
         }
     }
 }

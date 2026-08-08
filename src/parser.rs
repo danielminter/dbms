@@ -10,11 +10,8 @@ use crate::tokenizer::{Token, TokenQueue};
 
 pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
     // Convert to a dequeue
-    let root: RootNode = match input
-        .peek()
-        .ok_or_else(|| SyntaxError::new("No token found"))
-    {
-        Ok(Token::Keyword(t)) => match t.value() {
+    let root: RootNode = match input.next() {
+        Some(Token::Keyword(t)) => match t.value() {
             "CREATE" => {
                 println!("Statement Value: {}", t.value);
                 let result = match build_create_tree(&mut input) {
@@ -252,16 +249,24 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
 }
 
 fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> {
+    queue.print_queue();
     // Double check that the next is TABLE then pop it off
-    let _ = queue
-        .pop_and_check_value(vec!["TABLE"])
-        .ok_or(syntax_error(Some("Invalid token, Expected 'TABLE'")));
+    match queue.pop_and_check_value(vec!["TABLE"]) {
+        Some(_) => {}
+        None => {
+            return Err(SyntaxError::new("Invalid token, Expected 'TABLE'"));
+        }
+    }
     // Grab the next token as the table name
     let table_token = match queue.next() {
-        Some(val) => match val {
-            Token::Identifier(t) => t,
-            _ => return Err(SyntaxError::new("Invalid token, expected identifier")),
-        },
+        Some(val) => {
+            let value = val.string_value();
+            queue.print_queue();
+            match val {
+                Token::Identifier(t) => t,
+                _ => return Err(SyntaxError::new("Invalid token, expected identifier")),
+            }
+        }
         None => {
             return Err(SyntaxError::new("Missing token"));
         }
