@@ -4,7 +4,7 @@ mod tokenizer;
 
 use std::io::{self, Write};
 
-use crate::tokenizer::Token;
+use crate::tokenizer::{Token, TokenQueue};
 
 pub fn print_prompt() {
     print!("dbms >");
@@ -22,7 +22,7 @@ pub fn get_input() -> String {
 }
 
 pub fn evaluate_query(query: &str) {
-    let tokens: Vec<Token> = tokenizer::tokenize(query).unwrap();
+    let tokens: TokenQueue = tokenizer::tokenize(query).unwrap();
     let ast = parser::create_ast(tokens).unwrap();
 }
 

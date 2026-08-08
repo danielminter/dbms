@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     ffi::c_int,
-    fmt,
     io::{self},
 };
 
@@ -291,7 +290,7 @@ impl TokenQueue {
 
     pub fn peek(&self) -> Option<&Token> {
         if !self.tokens.is_empty() {
-            Some(self.tokens.front().unwrap())
+            Some(self.tokens.front()?)
         } else {
             None
         }
@@ -299,7 +298,7 @@ impl TokenQueue {
 
     pub fn next(&mut self) -> Option<Token> {
         if !self.tokens.is_empty() {
-            Some(self.tokens.pop_front().unwrap())
+            Some(self.tokens.pop_front()?)
         } else {
             None
         }
