@@ -4,6 +4,8 @@ use std::{
     io::{self},
 };
 
+use crate::parser::LiteralType;
+
 pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
     // convert_strings(split_text)
     let mut tokens: Vec<Token> = vec![];
@@ -68,8 +70,9 @@ pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
                 }
             }
 
-            let token = Token::StringLiteral(StringLiteral {
+            let token = Token::Literal(Literal {
                 value: current_string,
+                literal_type: LiteralType::String,
             });
 
             // Push it onto our vector
@@ -144,7 +147,10 @@ pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
                 // Construct the token
                 // Verify its a valid c_int and construct a token
                 let token = match current_string.parse::<c_int>() {
-                    Ok(int) => Token::IntLiteral(IntLiteral { value: int }),
+                    Ok(int) => Token::Literal(Literal {
+                        value: int.to_string(),
+                        literal_type: LiteralType::Integer,
+                    }),
                     Err(_) => {
                         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
                     }
@@ -268,7 +274,7 @@ impl TokenQueue {
 
     pub fn peek_and_check_value(&self, value: Vec<&str>) -> bool {
         match self.peek() {
-            Some(t) => value.contains(&t.string_value()),
+            Some(t) => value.contains(&t.value()),
             None => false,
         }
     }
@@ -276,7 +282,7 @@ impl TokenQueue {
     pub fn pop_and_check_value(&mut self, value: Vec<&str>) -> Option<Token> {
         match self.peek() {
             Some(t) => {
-                if value.contains(&t.string_value()) {
+                if value.contains(&t.value()) {
                     self.next()
                 } else {
                     None
@@ -304,54 +310,43 @@ impl TokenQueue {
 
     pub fn print_queue(&self) {
         for tok in &self.tokens {
-            let value = tok.string_value();
+            let value = tok.value();
             println!("{value}");
         }
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub enum Token {
     Keyword(Keyword),
     Identifier(Identifier),
-    StringLiteral(StringLiteral),
-    IntLiteral(IntLiteral),
+    Literal(Literal),
     Symbol(Symbol),
-    Operator(Operator),
 }
 
 impl Token {
-    pub fn int_value(&self) -> i32 {
+    pub fn value(&self) -> &str {
         match self {
-            Token::IntLiteral(t) => *t.value(),
-            _ => 0,
-        }
-    }
-
-    pub fn string_value(&self) -> &str {
-        match self {
-            Token::Keyword(t) => t.value(),
-            Token::Identifier(t) => t.value(),
-            Token::StringLiteral(t) => t.value(),
-            Token::Symbol(t) => t.value(),
-            Token::Operator(t) => t.value(),
-            _ => "",
+            Token::Keyword(t) => t.value.as_str(),
+            Token::Identifier(t) => t.value.as_str(),
+            Token::Literal(t) => t.value.as_str(),
+            Token::Symbol(t) => t.value.as_str(),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub struct Keyword {
     pub value: String,
 }
 
 impl Keyword {
     pub fn value(&self) -> &str {
-        &self.value.as_str()
+        self.value.as_str()
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub struct Identifier {
     pub value: String,
 }
@@ -362,48 +357,15 @@ impl Identifier {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct StringLiteral {
+#[derive(Debug, PartialEq)]
+pub struct Literal {
     pub value: String,
+    pub literal_type: LiteralType,
 }
 
-impl StringLiteral {
-    fn value(&self) -> &String {
-        &self.value
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct IntLiteral {
-    pub value: c_int,
-}
-
-impl IntLiteral {
-    fn value(&self) -> &c_int {
-        &self.value
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub struct Symbol {
     pub value: String,
-}
-
-impl Symbol {
-    fn value(&self) -> &String {
-        &self.value
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Operator {
-    pub value: String,
-}
-
-impl Operator {
-    fn value(&self) -> &String {
-        &self.value
-    }
 }
 
 #[cfg(test)]
@@ -444,8 +406,9 @@ mod tests {
     fn test_string_literal() {
         assert_eq!(
             tokenize("\'abc\'").unwrap(),
-            TokenQueue::new(vec![Token::StringLiteral(StringLiteral {
-                value: "abc".to_string()
+            TokenQueue::new(vec![Token::Literal(Literal {
+                value: "abc".to_string(),
+                literal_type: LiteralType::String,
             })])
         )
     }
@@ -454,7 +417,10 @@ mod tests {
     fn test_int_literal() {
         assert_eq!(
             tokenize("123").unwrap(),
-            TokenQueue::new(vec![Token::IntLiteral(IntLiteral { value: 123 })])
+            TokenQueue::new(vec![Token::Literal(Literal {
+                value: "123".to_string(),
+                literal_type: LiteralType::Integer
+            })])
         )
     }
 
@@ -523,13 +489,21 @@ mod tests {
         assert_eq!(
             tokenize("123 'abc' 456 'def'").unwrap(),
             TokenQueue::new(vec![
-                Token::IntLiteral(IntLiteral { value: 123 }),
-                Token::StringLiteral(StringLiteral {
-                    value: "abc".to_string()
+                Token::Literal(Literal {
+                    value: "123".to_string(),
+                    literal_type: LiteralType::Integer
                 }),
-                Token::IntLiteral(IntLiteral { value: 456 }),
-                Token::StringLiteral(StringLiteral {
-                    value: "def".to_string()
+                Token::Literal(Literal {
+                    value: "abc".to_string(),
+                    literal_type: LiteralType::String,
+                }),
+                Token::Literal(Literal {
+                    value: "456".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Literal(Literal {
+                    value: "def".to_string(),
+                    literal_type: LiteralType::String,
                 })
             ])
         )
@@ -543,14 +517,16 @@ mod tests {
                 Token::Identifier(Identifier {
                     value: "abc".to_string()
                 }),
-                Token::StringLiteral(StringLiteral {
-                    value: "def".to_string()
+                Token::Literal(Literal {
+                    value: "def".to_string(),
+                    literal_type: LiteralType::String,
                 }),
                 Token::Identifier(Identifier {
                     value: "ghi".to_string()
                 }),
-                Token::StringLiteral(StringLiteral {
-                    value: "jkl".to_string()
+                Token::Literal(Literal {
+                    value: "jkl".to_string(),
+                    literal_type: LiteralType::String,
                 }),
             ])
         )
