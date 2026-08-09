@@ -184,12 +184,14 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
                 // TODO: Change right condition to be a literal with a generic
                 let right: LiteralNode = match current.2.as_ref() {
                     Some(val) => match val {
-                        Token::StringLiteral(s) => LiteralNode::StringLiteral(StringLiteralNode {
+                        Token::StringLiteral(s) => LiteralNode {
                             value: String::from(&s.value),
-                        }),
-                        Token::IntLiteral(i) => {
-                            LiteralNode::IntegerLiteral(IntegerLiteralNode { value: i.value })
-                        }
+                            literal_type: LiteralType::String,
+                        },
+                        Token::IntLiteral(i) => LiteralNode {
+                            value: i.value.to_string(),
+                            literal_type: LiteralType::Integer,
+                        },
                         _ => return Err(SyntaxError::new("Invalid token type: Expected Literal")),
                     },
                     None => {
@@ -395,11 +397,13 @@ pub enum Node {
     Condition(ConditionNode),
     Operator(OperatorNode),
     Logical(LogicalNode),
+    Row(RowNode),
+    LiteralNode(LiteralNode),
 }
 
-pub enum LiteralNode {
-    StringLiteral(StringLiteralNode),
-    IntegerLiteral(IntegerLiteralNode),
+pub enum LiteralType {
+    String,
+    Integer,
 }
 
 pub struct CreateNode {
@@ -417,8 +421,12 @@ pub struct InsertNode {
     pub children: Vec<ValuesNode>,
 }
 
-pub struct ValuesNode {
-    pub value: LiteralNode,
+pub struct RowNode {
+    pub values: Vec<ValueNode>,
+}
+
+pub struct ValueNode {
+    pub literal: LiteralNode,
 }
 
 pub struct FromNode {
@@ -443,12 +451,9 @@ pub struct IdentifierNode {
     pub identifier: String,
 }
 
-pub struct StringLiteralNode {
+pub struct LiteralNode {
     pub value: String,
-}
-
-pub struct IntegerLiteralNode {
-    pub value: c_int,
+    pub literal_type: LiteralType,
 }
 
 pub struct ConditionNode {
@@ -476,7 +481,7 @@ pub struct LogicalNode {
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizer::{Identifier, Keyword, Symbol};
+    use crate::tokenizer::{Identifier, IntLiteral, Keyword, StringLiteral, Symbol};
 
     use super::*;
 
