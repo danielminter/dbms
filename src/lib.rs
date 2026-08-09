@@ -4,7 +4,7 @@ mod tokenizer;
 
 use std::io::{self, Write};
 
-use crate::tokenizer::{Token, TokenQueue};
+use crate::tokenizer::TokenQueue;
 
 pub fn print_prompt() {
     print!("dbms >");

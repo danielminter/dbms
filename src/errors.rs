@@ -1,4 +1,4 @@
-use std::{backtrace::Backtrace, io};
+use std::backtrace::Backtrace;
 
 #[derive(Debug)]
 pub struct SyntaxError {
@@ -13,12 +13,4 @@ impl SyntaxError {
             backtrace: Backtrace::capture(),
         }
     }
-}
-
-pub fn syntax_error(message: Option<&str>) -> io::Error {
-    let message = match message {
-        Some(m) => format!("Syntax Error: {m}"),
-        None => String::from("Syntax Error"),
-    };
-    io::Error::new(io::ErrorKind::InvalidInput, message)
 }
