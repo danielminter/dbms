@@ -1,48 +1,45 @@
-use crate::errors::SyntaxError;
-use crate::tokenizer::{Identifier, Literal, Token, TokenQueue};
+use crate::errors::{GenericSyntaxError, InvalidToken, InvalidValue, MissingToken, SyntaxError};
+use crate::tokenizer::{Literal, Token, TokenQueue, TokenTag};
 
 pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
+    input.print_queue();
     // Convert to a dequeue
     let root: RootNode = match input.next() {
-        Some(Token::Keyword(t)) => match t.value() {
+        Ok(Token::Keyword(t)) => match t.value() {
             "CREATE" => {
-                println!("Statement Value: {}", t.value);
-                let result = match build_create_tree(&mut input) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return Err(e);
-                    }
-                };
+                println!("Create Command Start");
+                let result = build_create_tree(&mut input)?;
                 RootNode::Create(result)
             }
             "SELECT" => {
-                println!("Statement Value: {}", t.value);
-                let result = match build_select_tree(&mut input) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return Err(e);
-                    }
-                };
+                println!("Select Command Start");
+                let result = build_select_tree(&mut input)?;
                 RootNode::Select(result)
             }
             "INSERT" => {
-                println!("Insert Value: {}", t.value);
-                input.print_queue();
-                let result = match build_insert_tree(&mut input) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return Err(e);
-                    }
-                };
+                println!("Insert Command Start");
+                let result = build_insert_tree(&mut input)?;
                 RootNode::Insert(result)
             }
-            _ => {
-                println!("Statement Value: {}", t.value);
-                return Err(SyntaxError::new("Invalid token at statement start"));
+            t => {
+                return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                    vec!["Keyword"],
+                    t,
+                )));
             }
         },
-        _ => {
-            return Err(SyntaxError::new("Command is not recognized"));
+        Ok(t) => {
+            println!("Returning Invalid token error");
+            return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                TokenTag::Keyword,
+                t.tag(),
+            )));
+        }
+        Err(_) => {
+            println!("Returning Missing token error");
+            return Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                TokenTag::Keyword,
+            ))));
         }
     };
 
@@ -51,59 +48,70 @@ pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
 
 fn build_insert_tree(queue: &mut TokenQueue) -> Result<InsertNode, SyntaxError> {
     // Check that the next token is "INTO"
-    let _ = queue
-        .pop_and_check_value(vec!["INTO"])
-        .ok_or_else(|| SyntaxError::new("Invalid token, expected 'INTO'"));
+    queue.validate_token_value(vec!["INTO"])?;
     // Get the following token as a table identifier
-    let table_name: Identifier = match queue.next() {
-        Some(Token::Identifier(val)) => val,
-        _ => return Err(SyntaxError::new("Invalid token, expected identifier")),
-    };
+    let table_name = queue.validate_token_type(TokenTag::Identifier)?;
     // Verify that the next token is "VALUES"
-    let _ = queue
-        .pop_and_check_value(vec!["VALUES"])
-        .ok_or_else(|| SyntaxError::new("Invalid token, expected 'VALUES'"));
+    queue.validate_token_value(vec!["VALUES"])?;
     // Verify that the next token is "LPAREN"
-    let _ = queue
-        .pop_and_check_value(vec!["LPAREN"])
-        .ok_or_else(|| SyntaxError::new("Invalid token, expected '('"));
+    queue.validate_token_value(vec!["LPAREN"])?;
     // Loop until we find a "RPAREN"
     let mut rows: Vec<Vec<Literal>> = vec![];
     'rows: loop {
         let mut values: Vec<Literal> = vec![];
         'values: loop {
             let next = match queue.next() {
-                Some(Token::Literal(t)) => t,
-                Some(Token::Symbol(s)) => match s.value.as_str() {
+                Ok(Token::Literal(t)) => t,
+                Ok(Token::Symbol(s)) => match s.value.as_str() {
                     // followed by a "COMMA"
                     "COMMA" => continue 'values,
                     // An "LPAREN" here means we're processing another row,
                     // TODO: Catch this correctly and enforce the right syntax
                     "LPAREN" => continue 'values,
                     "RPAREN" => break 'values,
-                    _ => return Err(SyntaxError::new("Invalid token, invalid symbol")),
+                    val => {
+                        return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                            vec![",", "(", ")"],
+                            val,
+                        )));
+                    }
                 },
-                _ => return Err(SyntaxError::new("Missing token, expected literal")),
+                _ => {
+                    return Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                        TokenTag::Literal,
+                    ))));
+                }
             };
             values.push(next);
         }
 
-        println!();
-        queue.print_queue();
-
         rows.push(values);
 
         match queue.next() {
-            Some(t) => match t {
+            Ok(t) => match t {
                 Token::Symbol(t) => match t.value.as_str() {
                     // If we find a "COMMA" after the "RPAREN", loop again for another row
                     "COMMA" => continue 'rows,
                     "SEMICOLON" => break 'rows,
-                    _ => return Err(SyntaxError::new("Invalid token")),
+                    val => {
+                        return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                            vec![",", ";"],
+                            val,
+                        )));
+                    }
                 },
-                _ => return Err(SyntaxError::new("Invalid token, expected symbol")),
+                val => {
+                    return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                        vec!["symbol"],
+                        val.value(),
+                    )));
+                }
             },
-            None => return Err(SyntaxError::new("Missing token")),
+            Err(_) => {
+                return Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                    TokenTag::Symbol,
+                ))));
+            }
         }
     }
 
@@ -129,7 +137,7 @@ fn build_insert_tree(queue: &mut TokenQueue) -> Result<InsertNode, SyntaxError> 
 
     // Construct the table identifier node
     let table_node = IdentifierNode {
-        identifier: table_name.value,
+        identifier: table_name.value().to_string(),
     };
 
     let root_node = InsertNode {
@@ -144,114 +152,98 @@ fn build_insert_tree(queue: &mut TokenQueue) -> Result<InsertNode, SyntaxError> 
 fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> {
     // Grab the first value as a column
     let mut columns: Vec<Token> = vec![];
-    println!("Grabbing columns");
     match queue.next() {
-        Some(val) => match val {
+        Ok(val) => match val {
             Token::Identifier(t) => {
                 columns.push(Token::Identifier(t));
             }
             Token::Symbol(s) => match s.value.as_str() {
                 "STAR" => columns.push(Token::Symbol(s)),
-                _ => return Err(SyntaxError::new("Invalid symbol passed as column name")),
+                val => {
+                    return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                        vec!["identifier"],
+                        val,
+                    )));
+                }
             },
-            _ => {
-                return Err(SyntaxError::new("Invalid token, expected identifier"));
+            val => {
+                return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                    vec!["identifier"],
+                    val.value(),
+                )));
             }
         },
-        None => {
-            return Err(SyntaxError::new("Invalid column identifier"));
+        Err(_) => {
+            return Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                TokenTag::Identifier,
+            ))));
         }
     }
     {};
 
     // After the first value, loop while the next token is an identifier
     loop {
-        match queue.next().ok_or(SyntaxError::new("Incomplete statement")) {
-            Ok(Token::Identifier(t)) => {
-                columns.push(Token::Identifier(t));
+        match queue.next_token_type() {
+            TokenTag::Identifier => {
+                columns.push(queue.next()?);
                 continue;
             }
             // If its a comma, keep going
-            Ok(Token::Symbol(s)) => {
-                if s.value == "COMMA" {
+            TokenTag::Symbol => {
+                if queue.next_token_contains(vec!["COMMA"]) {
                     continue;
                 } else {
-                    return Err(SyntaxError::new("Invalid Symbol"));
+                    return Err(SyntaxError::InvalidValue(InvalidValue::new(
+                        vec![","],
+                        queue.next()?.value(),
+                    )));
                 }
             }
             _ => break,
-        };
+        }
     }
 
     // Ensure the next token is "FROM"
-    let _ = queue
-        .pop_and_check_value(vec!["FROM"])
-        .ok_or(SyntaxError::new("Invalid token, expected 'FROM'"));
-
+    queue.validate_token_value(vec!["FROM"])?;
     // Grab the next token as the table identifier
-    let table_name: String = match queue.next().ok_or(SyntaxError::new("Incomplete Statement")) {
-        Ok(Token::Identifier(t)) => t.value,
-        _ => return Err(SyntaxError::new("Invalid token")),
-    };
+    let table_name = queue.validate_token_type(TokenTag::Identifier)?;
 
     let mut conditions: Vec<(Token, Option<Token>, Option<Token>)> = vec![];
 
     // Check for an ending Semicolon
-    while !queue.peek_and_check_value(vec!["SEMICOLON"]) {
+    while !queue.next_token_contains(vec!["SEMICOLON"]) {
         // If there is a WHERE, Loop over values creating conditions
         // TODO: Handle conditions wrapped in parenthesis
-        if queue.peek_and_check_value(vec!["WHERE"]) {
+        if queue.next_token_contains(vec!["WHERE"]) {
+            queue.print_queue();
+            // Consume the "WHERE"
+            queue.next()?;
+            queue.print_queue();
             'conditions: loop {
                 // Exit condition
-                if queue.peek_and_check_value(vec!["SEMICOLON"]) || !queue.has_tokens() {
+                if queue.next_token_contains(vec!["SEMICOLON"]) || !queue.has_tokens() {
                     break 'conditions;
                 }
 
                 // Add the keyword as part of the conditions and then continue
-                if queue.peek_and_check_value(vec!["AND", "OR"]) {
-                    conditions.push((
-                        match queue.next() {
-                            Some(val) => val,
-                            None => {
-                                return Err(SyntaxError::new("Missing token"));
-                            }
-                        },
-                        None,
-                        None,
-                    ));
+                if queue.next_token_contains(vec!["AND", "OR"]) {
+                    conditions.push((queue.next()?, None, None));
 
                     continue;
                 }
 
                 // Create conditions
-                let left = match queue.next() {
-                    Some(val) => val,
-                    None => {
-                        return Err(SyntaxError::new("Missing token"));
-                    }
-                };
-                let op = match queue.next() {
-                    Some(val) => Some(val),
-                    None => {
-                        return Err(SyntaxError::new("Missing token"));
-                    }
-                };
-                let right = match queue.next() {
-                    Some(val) => Some(val),
-                    None => {
-                        return Err(SyntaxError::new("Missing token"));
-                    }
-                };
+                let left = queue.next()?;
+                let op = queue.next()?;
+                let right = queue.next()?;
 
-                conditions.push((left, op, right));
+                conditions.push((left, Some(op), Some(right)));
             }
         }
     }
 
     // Double check that we have an ending semicolon
-    let _ = queue
-        .pop_and_check_value(vec!["SEMICOLON"])
-        .ok_or(SyntaxError::new("Missing end semicolon"));
+    queue.validate_token_value(vec!["SEMICOLON"])?;
 
     // Construct the ast from bottom up
 
@@ -260,24 +252,27 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
 
     let mut conditions = conditions.iter().peekable();
     while let Some(current) = conditions.next() {
-        match current.0 {
+        match current.0.tag() {
             // If the next condition is a logical operator, add it to the previous node
-            Token::Identifier(_) => {
+            TokenTag::Identifier => {
                 let left = IdentifierNode {
-                    identifier: if let Token::Identifier(t) = &current.0 {
-                        t.value.clone()
-                    } else {
-                        return Err(SyntaxError::new("Invalid token"));
-                    },
+                    identifier: current.0.value().to_string(),
                 };
                 let operator = OperatorNode {
                     operator: match current.1.as_ref() {
                         Some(val) => match val {
                             Token::Symbol(t) => t.value.clone(),
-                            _ => return Err(SyntaxError::new("Invalid token")),
+                            t => {
+                                return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                                    TokenTag::Symbol,
+                                    t.tag(),
+                                )));
+                            }
                         },
                         None => {
-                            return Err(SyntaxError::new("Invalid condition construction"));
+                            return Err(SyntaxError::GenericSyntaxError(GenericSyntaxError::new(
+                                "Invalid condition construction",
+                            )));
                         }
                     },
                 };
@@ -288,10 +283,17 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
                             value: String::from(&s.value),
                             literal_type: LiteralType::String,
                         },
-                        _ => return Err(SyntaxError::new("Invalid token type: Expected Literal")),
+                        t => {
+                            return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                                TokenTag::Literal,
+                                t.tag(),
+                            )));
+                        }
                     },
                     None => {
-                        return Err(SyntaxError::new("Invalid condition construction"));
+                        return Err(SyntaxError::GenericSyntaxError(GenericSyntaxError::new(
+                            "Invalid condition construction",
+                        )));
                     }
                 };
 
@@ -312,7 +314,7 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
 
                 condtion_nodes.push(node);
             }
-            _ => return Err(SyntaxError::new("")),
+            _ => return Err(SyntaxError::GenericSyntaxError(GenericSyntaxError::new(""))),
         }
     }
 
@@ -328,7 +330,12 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
             Token::Identifier(i) => IdentifierNode {
                 identifier: i.value,
             },
-            _ => return Err(SyntaxError::new("Invalid column identifier")),
+            t => {
+                return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                    TokenTag::Identifier,
+                    t.tag(),
+                )));
+            }
         };
         column_nodes.push(c);
     }
@@ -337,7 +344,7 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
         columns: column_nodes,
         child: FromNode {
             table: IdentifierNode {
-                identifier: table_name,
+                identifier: table_name.value().to_string(),
             },
             children: vec![Node::Where(where_node)],
         },
@@ -347,95 +354,45 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
 }
 
 fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> {
-    queue.print_queue();
     // Double check that the next is TABLE then pop it off
-    match queue.pop_and_check_value(vec!["TABLE"]) {
-        Some(_) => {}
-        None => {
-            return Err(SyntaxError::new("Invalid token, Expected 'TABLE'"));
-        }
-    }
+    queue.validate_token_value(vec!["TABLE"])?;
     // Grab the next token as the table name
-    let table_token = match queue.next() {
-        Some(val) => {
-            queue.print_queue();
-            match val {
-                Token::Identifier(t) => t,
-                _ => return Err(SyntaxError::new("Invalid token, expected identifier")),
-            }
-        }
-        None => {
-            return Err(SyntaxError::new("Missing token"));
-        }
-    };
+    let table_token = queue.validate_token_type(TokenTag::Identifier)?;
 
     // Make sure the next token is VALUES and discard
-    let _ = queue
-        .pop_and_check_value(vec!["VALUES"])
-        .ok_or(SyntaxError::new("Invalid token, Expected 'VALUES'"));
-
+    queue.validate_token_value(vec!["VALUES"])?;
     // Check that an LPAREN is next then discard
-    let _ = queue
-        .pop_and_check_value(vec!["LPAREN"])
-        .ok_or(SyntaxError::new("Invalid token, Expected '('"));
+    queue.validate_token_value(vec!["LPAREN"])?;
 
     let mut columns: Vec<(Token, Vec<Option<Token>>)> = vec![];
 
     // Loop over remaining tokens
     'columns: loop {
         // Break if we hit an RPAREN
-        if !queue.has_tokens() || queue.peek_and_check_value(vec!["RPAREN"]) {
+        if queue.validate_token_value(vec!["RPAREN"]).is_ok() {
             break 'columns;
         }
 
         // First token is column
-        let column_token = match queue.next() {
-            Some(val) => match val {
-                Token::Identifier(i) => Token::Identifier(i),
-                _ => return Err(SyntaxError::new("Invalid token, expected identifier")),
-            },
-            None => {
-                return Err(SyntaxError::new("Missing token"));
-            }
-        };
-
+        let column_token = queue.validate_token_type(TokenTag::Identifier)?;
         // Loop until a commma or an RPAREN
         let mut constraints: Vec<Option<Token>> = vec![];
         'constraints: loop {
-            if !queue.has_tokens() {
-                return Err(SyntaxError::new("Missing token"));
-            }
-
-            if queue.peek_and_check_value(vec!["RPAREN", "COMMA"]) {
+            if queue.next_token_contains(vec!["RPAREN", "COMMA"]) {
                 break 'constraints;
             }
 
             // TODO: Handle compound conditions
 
             // Any remaining tokens are constraints
-            match queue.next() {
-                Some(val) => match val {
-                    Token::Keyword(t) => constraints.push(Some(Token::Keyword(t))),
-                    _ => break 'constraints,
-                },
-                None => {
-                    return Err(SyntaxError::new("Missing token"));
-                }
-            }
+            constraints.push(Some(queue.validate_token_type(TokenTag::Keyword)?));
         }
 
         columns.push((column_token, constraints));
     }
 
-    // Consume the RPAREN
-    let _ = queue
-        .pop_and_check_value(vec!["RPAREN"])
-        .ok_or(SyntaxError::new("Invalid token, expected ')'"));
-
     // Check that it ends with SEMICOLON
-    let _ = queue
-        .pop_and_check_value(vec!["SEMICOLON"])
-        .ok_or(SyntaxError::new("Invalid token, expected ';'"));
+    queue.validate_token_value(vec!["SEMICOLON"])?;
 
     // Construct the tree from bottom up.
     let mut column_nodes: Vec<ColumnNode> = vec![];
@@ -446,7 +403,7 @@ fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> 
                 value: match constraint {
                     Some(val) => val.value().to_string(),
                     None => {
-                        return Err(SyntaxError::new("Token not found"));
+                        return Err(SyntaxError::MissingToken(MissingToken::new(None)));
                     }
                 },
             })
@@ -470,18 +427,23 @@ fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> 
         children: column_nodes,
     };
 
+    println!("{}", root.table.identifier);
+    println!("{}", root.children[0].column_identifier.identifier);
+
     // Return the tree
     Ok(root)
 }
 
 // fn build_insert_tree(queue: &mut VecDeque<Token>) -> Result<Node, io::Error> {}
 
+#[derive(Debug)]
 pub enum RootNode {
     Create(CreateNode),
     Select(SelectNode),
     Insert(InsertNode),
 }
 
+#[derive(Debug)]
 pub enum Node {
     From(FromNode),
     Where(WhereNode),
@@ -501,52 +463,63 @@ pub enum LiteralType {
     Integer,
 }
 
+#[derive(Debug)]
 pub struct CreateNode {
     pub table: IdentifierNode,
     pub children: Vec<ColumnNode>,
 }
 
+#[derive(Debug)]
 pub struct SelectNode {
     pub columns: Vec<IdentifierNode>,
     pub child: FromNode,
 }
 
+#[derive(Debug)]
 pub struct InsertNode {
     pub table: IdentifierNode,
     pub children: Vec<RowNode>,
 }
 
+#[derive(Debug)]
 pub struct RowNode {
     pub literals: Vec<LiteralNode>,
 }
 
+#[derive(Debug)]
 pub struct FromNode {
     pub table: IdentifierNode,
     pub children: Vec<Node>,
 }
 
+#[derive(Debug)]
 pub struct WhereNode {
     pub conditions: Vec<ConditionNode>,
 }
 
+#[derive(Debug)]
 pub struct ColumnNode {
     pub column_identifier: IdentifierNode,
     pub constraints: Option<Vec<ConstraintNode>>,
 }
 
+#[derive(Debug)]
 pub struct ConstraintNode {
     pub value: String,
 }
 
+#[derive(Debug)]
 pub struct IdentifierNode {
     pub identifier: String,
 }
 
+#[derive(Debug)]
 pub struct LiteralNode {
     pub value: String,
     pub literal_type: LiteralType,
 }
 
+#[derive(Debug)]
 pub struct ConditionNode {
     pub left: IdentifierNode,
     pub operator: OperatorNode,
@@ -562,17 +535,22 @@ impl ConditionNode {
     }
 }
 
+#[derive(Debug)]
 pub struct OperatorNode {
     pub operator: String,
 }
 
+#[derive(Debug)]
 pub struct LogicalNode {
     pub logic: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::tokenizer::{Identifier, Keyword, Literal, Symbol};
+    use crate::{
+        errors::Printable,
+        tokenizer::{Identifier, Keyword, Literal, Symbol},
+    };
 
     use super::*;
 
@@ -605,8 +583,10 @@ mod tests {
             }),
         ]);
 
-        let RootNode::Create(node) = create_ast(command).unwrap() else {
-            panic!("Expected a SELECT node, got something else");
+        let node = match create_ast(command) {
+            Ok(RootNode::Create(val)) => val,
+            Ok(_) => panic!("Unexpected node type created"),
+            Err(e) => panic!("{}", e.message()),
         };
 
         assert_eq!(node.table.identifier, "users");
@@ -614,17 +594,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_missing_create_keyword() {
         let command: TokenQueue = TokenQueue::new(vec![Token::Keyword(Keyword {
             value: "NOT_CREATE".to_string(),
         })]);
 
-        create_ast(command).expect("Create Failed");
+        command.print_queue();
+
+        let result = create_ast(command);
+
+        assert!(result.is_err());
     }
 
     #[test]
-    #[should_panic]
     fn test_missing_table_keyword() {
         let command: TokenQueue = TokenQueue::new(vec![
             Token::Keyword(Keyword {
@@ -635,25 +617,24 @@ mod tests {
             }),
         ]);
 
-        create_ast(command).expect("Create Failed");
+        assert!(create_ast(command).is_err());
     }
 
     #[test]
-    #[should_panic]
     fn test_wrong_token_type() {
         let command: TokenQueue = TokenQueue::new(vec![
             Token::Keyword(Keyword {
                 value: "CREATE".to_string(),
             }),
             Token::Keyword(Keyword {
-                value: "NOT_TABLE".to_string(),
+                value: "TABLE".to_string(),
             }),
             Token::Symbol(Symbol {
                 value: "LPAREN".to_string(),
             }),
         ]);
 
-        create_ast(command).expect("Create Failed");
+        assert!(create_ast(command).is_err());
     }
 
     #[test]
@@ -676,10 +657,10 @@ mod tests {
             }),
         ]);
 
-        let completed_tree = create_ast(command);
-
-        let RootNode::Select(node) = completed_tree.unwrap() else {
-            panic!("Expected a SELECT node, got something else");
+        let node = match create_ast(command) {
+            Ok(RootNode::Select(val)) => val,
+            Ok(_) => panic!("Expected a SELECT node, got something else"),
+            Err(e) => panic!("{}", e.message()),
         };
 
         assert_eq!(node.columns[0].identifier, "STAR");
@@ -732,8 +713,10 @@ mod tests {
 
         let completed_tree = create_ast(command);
 
-        let RootNode::Insert(node) = completed_tree.unwrap() else {
-            panic!("Expected a INSERT node, got something else");
+        let node = match completed_tree {
+            Ok(RootNode::Insert(val)) => val,
+            Ok(_) => panic!("Expected a INSERT node, got something else"),
+            Err(e) => panic!("{}", e.message()),
         };
 
         assert_eq!(node.children[0].literals[0].value, "1");
@@ -819,10 +802,10 @@ mod tests {
             }),
         ]);
 
-        let completed_tree = create_ast(command);
-
-        let RootNode::Insert(node) = completed_tree.unwrap() else {
-            panic!("Expected a INSERT node, got something else");
+        let node = match create_ast(command) {
+            Ok(RootNode::Insert(val)) => val,
+            Ok(_) => panic!("Expected a INSERT node, got something else"),
+            Err(e) => panic!("{}", e.message()),
         };
 
         assert_eq!(node.children[0].literals[0].value, "1");

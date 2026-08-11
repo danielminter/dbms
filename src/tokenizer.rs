@@ -4,7 +4,10 @@ use std::{
     io::{self},
 };
 
-use crate::parser::LiteralType;
+use crate::{
+    errors::{InvalidToken, InvalidValue, MissingToken, SyntaxError},
+    parser::LiteralType,
+};
 
 pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
     // convert_strings(split_text)
@@ -272,27 +275,55 @@ impl TokenQueue {
         }
     }
 
-    pub fn peek_and_check_value(&self, value: Vec<&str>) -> bool {
+    pub fn validate_token_type(&mut self, token_type: TokenTag) -> Result<Token, SyntaxError> {
+        match self.peek() {
+            Some(t) => {
+                if token_type == t.tag() {
+                    Ok(self.next()?)
+                } else {
+                    Err(SyntaxError::InvalidToken(InvalidToken::new(
+                        token_type,
+                        t.tag(),
+                    )))
+                }
+            }
+            None => Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                token_type,
+            )))),
+        }
+    }
+
+    pub fn validate_token_value(&mut self, value: Vec<&str>) -> Result<Token, SyntaxError> {
+        match self.peek() {
+            Some(t) => match value.contains(&t.value()) {
+                true => {
+                    let token = self.next()?;
+                    Ok(token)
+                }
+                false => Err(SyntaxError::InvalidValue(InvalidValue::new(
+                    value,
+                    t.value(),
+                ))),
+            },
+            None => Err(SyntaxError::MissingToken(MissingToken::new(None))),
+        }
+    }
+
+    pub fn next_token_type(&self) -> TokenTag {
+        match self.peek() {
+            Some(t) => t.tag(),
+            None => TokenTag::None,
+        }
+    }
+
+    pub fn next_token_contains(&self, value: Vec<&str>) -> bool {
         match self.peek() {
             Some(t) => value.contains(&t.value()),
             None => false,
         }
     }
 
-    pub fn pop_and_check_value(&mut self, value: Vec<&str>) -> Option<Token> {
-        match self.peek() {
-            Some(t) => {
-                if value.contains(&t.value()) {
-                    self.next()
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
-    }
-
-    pub fn peek(&self) -> Option<&Token> {
+    fn peek(&self) -> Option<&Token> {
         if !self.tokens.is_empty() {
             Some(self.tokens.front()?)
         } else {
@@ -300,18 +331,18 @@ impl TokenQueue {
         }
     }
 
-    pub fn next(&mut self) -> Option<Token> {
+    pub fn next(&mut self) -> Result<Token, SyntaxError> {
         if !self.tokens.is_empty() {
-            Some(self.tokens.pop_front()?)
+            Ok(self.tokens.pop_front().unwrap())
         } else {
-            None
+            Err(SyntaxError::MissingToken(MissingToken::new(None)))
         }
     }
 
     pub fn print_queue(&self) {
+        println!();
         for tok in &self.tokens {
-            let value = tok.value();
-            println!("{value}");
+            println!("{}: {}", tok.tag().to_string(), tok.value());
         }
     }
 }
@@ -331,6 +362,36 @@ impl Token {
             Token::Identifier(t) => t.value.as_str(),
             Token::Literal(t) => t.value.as_str(),
             Token::Symbol(t) => t.value.as_str(),
+        }
+    }
+
+    pub fn tag(&self) -> TokenTag {
+        match self {
+            Token::Keyword(_) => TokenTag::Keyword,
+            Token::Identifier(_) => TokenTag::Identifier,
+            Token::Literal(_) => TokenTag::Literal,
+            Token::Symbol(_) => TokenTag::Symbol,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum TokenTag {
+    Keyword,
+    Identifier,
+    Literal,
+    Symbol,
+    None,
+}
+
+impl TokenTag {
+    pub fn to_string(&self) -> String {
+        match self {
+            TokenTag::Keyword => "Keyword".to_string(),
+            TokenTag::Identifier => "Identifier".to_string(),
+            TokenTag::Literal => "Literal".to_string(),
+            TokenTag::Symbol => "Symbol".to_string(),
+            TokenTag::None => "None".to_string(),
         }
     }
 }

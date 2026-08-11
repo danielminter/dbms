@@ -1,16 +1,114 @@
-use std::backtrace::Backtrace;
+use crate::tokenizer::TokenTag;
 
-#[derive(Debug)]
-pub struct SyntaxError {
-    msg: String,
-    backtrace: Backtrace,
+pub trait Printable {
+    fn message(&self) -> String;
 }
 
-impl SyntaxError {
-    pub fn new(msg: &str) -> Self {
-        Self {
-            msg: format!("Syntax Error: {msg}"),
-            backtrace: Backtrace::capture(),
+pub enum SyntaxError {
+    InvalidValue(InvalidValue),
+    InvalidToken(InvalidToken),
+    MissingToken(MissingToken),
+    GenericSyntaxError(GenericSyntaxError),
+}
+
+pub struct InvalidValue {
+    expected: Vec<String>,
+    encountered: String,
+}
+
+impl InvalidValue {
+    pub fn new(expected: Vec<&str>, encountered: &str) -> InvalidValue {
+        InvalidValue {
+            expected: expected.iter().map(|s| s.to_string()).collect(),
+            encountered: encountered.to_string(),
         }
+    }
+}
+
+impl Printable for InvalidValue {
+    fn message(&self) -> String {
+        let mut expected: String = String::new();
+        for item in &self.expected {
+            expected.push_str(item);
+            expected.push('/');
+        }
+        // Remove the last trailing /
+        _ = expected.pop();
+        format!(
+            "Invalid token. Expected: {}, Found: {}",
+            expected, self.encountered
+        )
+    }
+}
+
+impl Printable for SyntaxError {
+    fn message(&self) -> String {
+        match self {
+            SyntaxError::InvalidValue(t) => t.message(),
+            SyntaxError::InvalidToken(t) => t.message(),
+            SyntaxError::MissingToken(t) => t.message(),
+            SyntaxError::GenericSyntaxError(t) => t.message(),
+        }
+    }
+}
+
+pub struct InvalidToken {
+    expected: TokenTag,
+    encountered: TokenTag,
+}
+
+impl InvalidToken {
+    pub fn new(expected: TokenTag, encountered: TokenTag) -> InvalidToken {
+        InvalidToken {
+            expected,
+            encountered,
+        }
+    }
+}
+
+impl Printable for InvalidToken {
+    fn message(&self) -> String {
+        format!(
+            "Invalid token. Expected: {}, Found: {}",
+            self.expected.to_string(),
+            self.encountered.to_string()
+        )
+    }
+}
+
+pub struct MissingToken {
+    expected: Option<TokenTag>,
+}
+
+impl MissingToken {
+    pub fn new(expected: Option<TokenTag>) -> MissingToken {
+        MissingToken { expected }
+    }
+}
+
+impl Printable for MissingToken {
+    fn message(&self) -> String {
+        match self.expected {
+            Some(t) => format!("Missing token. Expected: {}", t.to_string()),
+            None => "Missing token".to_string(),
+        }
+    }
+}
+
+pub struct GenericSyntaxError {
+    msg: String,
+}
+
+impl GenericSyntaxError {
+    pub fn new(msg: &str) -> GenericSyntaxError {
+        GenericSyntaxError {
+            msg: msg.to_string(),
+        }
+    }
+}
+
+impl Printable for GenericSyntaxError {
+    fn message(&self) -> String {
+        self.msg.to_string()
     }
 }

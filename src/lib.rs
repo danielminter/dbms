@@ -4,7 +4,7 @@ mod tokenizer;
 
 use std::io::{self, Write};
 
-use crate::tokenizer::TokenQueue;
+use crate::{errors::SyntaxError, tokenizer::TokenQueue};
 
 pub fn print_prompt() {
     print!("dbms >");
@@ -21,9 +21,10 @@ pub fn get_input() -> String {
     String::from(user_input.trim())
 }
 
-pub fn evaluate_query(query: &str) {
+pub fn evaluate_query(query: &str) -> Result<String, SyntaxError> {
     let tokens: TokenQueue = tokenizer::tokenize(query).unwrap();
-    let ast = parser::create_ast(tokens).unwrap();
+    let ast = parser::create_ast(tokens)?;
+    Ok("Okay".to_string())
 }
 
 #[derive(Debug)]
