@@ -16,7 +16,8 @@ fn main() {
             println!(".exit     Exit the REPL");
             println!(".help     This menu");
         } else {
-            let query_status = evaluate_query(&user_input);
+            let query_status = evaluate_query(&user_input).unwrap();
+            println!("Status: {}", query_status);
         }
     }
 }
