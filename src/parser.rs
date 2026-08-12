@@ -4,22 +4,18 @@ use crate::errors::{
 use crate::tokenizer::{Literal, SymbolType, Token, TokenQueue, TokenTag};
 
 pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
-    input.print_queue();
     // Convert to a dequeue
     let root: RootNode = match input.next() {
         Ok(Token::Keyword(t)) => match t.value() {
             "CREATE" => {
-                println!("Create Command Start");
                 let result = build_create_tree(&mut input)?;
                 RootNode::Create(result)
             }
             "SELECT" => {
-                println!("Select Command Start");
                 let result = build_select_tree(&mut input)?;
                 RootNode::Select(result)
             }
             "INSERT" => {
-                println!("Insert Command Start");
                 let result = build_insert_tree(&mut input)?;
                 RootNode::Insert(result)
             }
@@ -31,14 +27,12 @@ pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
             }
         },
         Ok(t) => {
-            println!("Returning Invalid token error");
             return Err(SyntaxError::InvalidToken(InvalidToken::new(
                 TokenTag::Keyword,
                 t.tag(),
             )));
         }
         Err(_) => {
-            println!("Returning Missing token error");
             return Err(SyntaxError::MissingToken(MissingToken::new(Some(
                 TokenTag::Keyword,
             ))));
@@ -208,10 +202,8 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
         // If there is a WHERE, Loop over values creating conditions
         // TODO: Handle conditions wrapped in parenthesis
         if queue.next_token_contains(vec!["WHERE"]) {
-            queue.print_queue();
             // Consume the "WHERE"
             queue.next()?;
-            queue.print_queue();
             'conditions: loop {
                 // Exit condition
                 if queue.check_next_symbol(vec![SymbolType::Semicolon]) || !queue.has_tokens() {
@@ -413,9 +405,6 @@ fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> 
         children: column_nodes,
     };
 
-    println!("{}", root.table.identifier);
-    println!("{}", root.children[0].column_identifier.identifier);
-
     // Return the tree
     Ok(root)
 }
@@ -579,9 +568,7 @@ mod tests {
     fn test_missing_create_keyword() {
         let command: TokenQueue = TokenQueue::new(vec![Token::Keyword(Keyword {
             value: "NOT_CREATE".to_string(),
-        })]);
-
-        command.print_queue();
+        })]));
 
         let result = create_ast(command);
 
