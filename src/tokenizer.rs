@@ -1,262 +1,200 @@
 use std::{
     collections::VecDeque,
-    ffi::c_int,
     io::{self},
+    thread::current,
 };
 
 use crate::{
-    errors::{InvalidToken, InvalidValue, MissingToken, SyntaxError},
+    errors::{InvalidToken, InvalidValue, MissingToken, SyntaxError, UnexpectedSymbol},
     parser::LiteralType,
 };
 
 pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
-    // convert_strings(split_text)
-    let mut tokens: Vec<Token> = vec![];
     let mut characters: VecDeque<char> = text.chars().collect();
 
-    // Main parsing loop
-    'parsing: while !characters.is_empty() {
-        //  Peek at the next character
-        let mut next_char = *characters.front().unwrap();
+    // Turn the vecdeque into a vec of individual strings
+    let mut statement_strings = statement_to_strings(&mut characters);
 
-        // Skip over white space
-        if char::is_whitespace(next_char) {
-            characters.pop_front();
-            continue 'parsing;
-        }
-
-        // Special Cases for items in double quotes
-        if next_char == '\"' {
-            // Initialize a new token
-            let mut current_string: String = String::new();
-
-            // Drop the starting quote
-            characters.pop_front();
-
-            next_char = *characters.front().unwrap();
-
-            while !characters.is_empty() && next_char != '\"' {
-                current_string.push(characters.pop_front().unwrap());
-                if !characters.is_empty() {
-                    next_char = *characters.front().unwrap();
-                }
-            }
-
-            let token = Token::Identifier(Identifier {
-                value: current_string,
-            });
-
-            // Push it onto our vector
-            tokens.push(token);
-
-            // Make sure we skip the trailing quote
-            if *characters.front().unwrap() == '\"' {
-                characters.pop_front();
-            }
-
-            continue 'parsing;
-        }
-
-        // Special Case for items in single quotes
-        if next_char == '\'' {
-            // Initialize a new token
-            let mut current_string: String = String::new();
-
-            // Drop the starting quote
-            characters.pop_front();
-            next_char = *characters.front().unwrap();
-
-            while !characters.is_empty() && next_char != '\'' {
-                current_string.push(characters.pop_front().unwrap());
-                if !characters.is_empty() {
-                    next_char = *characters.front().unwrap();
-                }
-            }
-
-            let token = Token::Literal(Literal {
-                value: current_string,
-                literal_type: LiteralType::String,
-            });
-
-            // Push it onto our vector
-            tokens.push(token);
-
-            // Make sure we skip the trailing quote
-            if *characters.front().unwrap() == '\'' {
-                characters.pop_front();
-            }
-
-            continue 'parsing;
-        }
-
-        // Determine what type of token we have based on the first char
-        if char::is_alphabetic(next_char) {
-            // Initialize a new token
-            let mut current_string: String = String::new();
-
-            if char::is_uppercase(next_char) {
-                // Parse it as a keyword if its in Caps
-                //Build the current token with all consecutive caps characters
-                while !characters.is_empty() && char::is_uppercase(next_char) {
-                    current_string.push(characters.pop_front().unwrap());
-
-                    if !characters.is_empty() {
-                        next_char = *characters.front().unwrap();
-                    }
-                }
-
-                // Construct the token
-                let token = Token::Keyword(Keyword {
-                    value: current_string,
-                });
-
-                // Push it onto our vector
-                tokens.push(token);
-
-                continue 'parsing;
-            } else {
-                // If not the above, parse as an identifier
-                //Build the current token with all consecutive non-caps characters
-                while !characters.is_empty() && char::is_alphabetic(next_char) {
-                    current_string.push(characters.pop_front().unwrap());
-                    if !characters.is_empty() {
-                        next_char = *characters.front().unwrap();
-                    }
-                }
-                // Construct the token
-                let token = Token::Identifier(Identifier {
-                    value: current_string,
-                });
-
-                // Push it onto our vector
-                tokens.push(token);
-                continue 'parsing;
-            }
-        }
-
-        // Determine if its numeric
-        if char::is_numeric(next_char) {
-            // Initialize a new token
-            let mut current_string: String = String::new();
-
-            if char::is_digit(next_char, 10) {
-                // Try and parse it as a integer literal
-                while !characters.is_empty() && char::is_digit(next_char, 10) {
-                    current_string.push(characters.pop_front().unwrap());
-                    if !characters.is_empty() {
-                        next_char = *characters.front().unwrap();
-                    }
-                }
-                // Construct the token
-                // Verify its a valid c_int and construct a token
-                let token = match current_string.parse::<c_int>() {
-                    Ok(int) => Token::Literal(Literal {
-                        value: int.to_string(),
-                        literal_type: LiteralType::Integer,
-                    }),
-                    Err(_) => {
-                        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Syntax Error"));
-                    }
-                };
-
-                // Push it onto our vector
-                tokens.push(token);
-            }
-        }
-        if char::is_ascii_punctuation(&next_char) {
-            // Initialize the string
-            let mut current_string: String = String::new();
-
-            // Numeric but not a digit, parse as a symbol
-            while !characters.is_empty() && char::is_ascii_punctuation(&next_char) {
-                current_string = tokenize_symbol(&mut characters);
-
-                if !characters.is_empty() {
-                    next_char = *characters.front().unwrap();
-                }
-            }
-
-            let token = Token::Symbol(Symbol {
-                value: current_string,
-            });
-
-            // Push it onto our vector
-            tokens.push(token);
-
-            continue 'parsing;
-        }
-
-        // Consume the character if it hasn't been caught by anything
-        characters.pop_front();
-    }
+    // Convert the strings to tokens
+    let tokens: VecDeque<Token> = transform_to_tokens(&mut statement_strings);
 
     Ok(TokenQueue::new(tokens))
 }
 
-fn tokenize_symbol(characters: &mut VecDeque<char>) -> String {
-    let mut current_string: String;
-    let next_char = characters.pop_front().unwrap();
-    match next_char {
-        '<' => {
-            current_string = String::from("LESSTHAN");
-            // Handle the compound symbols
-            if !characters.is_empty() && *characters.front().unwrap() == '=' {
-                append_equals(characters, &mut current_string);
+fn transform_to_tokens(strings: &mut VecDeque<(String, StringKind)>) -> VecDeque<Token> {
+    let mut result_queue: VecDeque<Token> = VecDeque::new();
+    while !strings.is_empty() {
+        let (value, current_string_type) = strings.pop_front().unwrap();
+        match current_string_type {
+            StringKind::Keyword => {
+                result_queue.push_back(Token::Keyword(Keyword { value }));
             }
-        }
-        '>' => {
-            current_string = String::from("GREATERTHAN");
-            // Handle the compound symbols
-            if !characters.is_empty() && *characters.front().unwrap() == '=' {
-                append_equals(characters, &mut current_string);
+            StringKind::Identifier => {
+                result_queue.push_back(Token::Identifier(Identifier { value }));
             }
-        }
-        '(' => {
-            current_string = String::from("LPAREN");
-        }
-        ')' => {
-            current_string = String::from("RPAREN");
-        }
-        ',' => {
-            current_string = String::from("COMMA");
-        }
-        '*' => {
-            current_string = String::from("STAR");
-        }
-        '=' => {
-            current_string = String::from("EQUAL");
-        }
-        '+' => {
-            current_string = String::from("PLUS");
-            // Handle the compound symbols
-            if !characters.is_empty() && *characters.front().unwrap() == '=' {
-                append_equals(characters, &mut current_string);
+            StringKind::Literal => {
+                let mut literal_type = LiteralType::String;
+                if !value.chars().next().unwrap().is_ascii_alphabetic() {
+                    literal_type = LiteralType::Integer;
+                }
+                result_queue.push_back(Token::Literal(Literal {
+                    value,
+                    literal_type,
+                }));
             }
-        }
-        '-' => {
-            current_string = String::from("MINUS");
-            // Handle the compound symbols
-            if !characters.is_empty() && *characters.front().unwrap() == '=' {
-                append_equals(characters, &mut current_string);
+            StringKind::Symbol => {
+                result_queue.push_back(Token::Symbol(transform_symbol(value)));
             }
-        }
-        ';' => {
-            current_string = String::from("SEMICOLON");
-        }
-        _ => {
-            current_string = String::from("UNK");
+            StringKind::None => todo!(),
         }
     }
 
-    fn append_equals(characters: &mut VecDeque<char>, current_string: &mut String) {
-        current_string.push_str("EQUAL");
+    result_queue
+}
 
-        // Consume the equals
-        characters.pop_front();
+fn statement_to_strings(strings: &mut VecDeque<char>) -> VecDeque<(String, StringKind)> {
+    let mut result_vec: VecDeque<(String, StringKind)> = VecDeque::new();
+    while !strings.is_empty() {
+        result_vec.push_back(parse_single_string(strings));
     }
 
-    // Return our constructed token
-    current_string
+    result_vec
+}
+
+fn parse_single_string(characters: &mut VecDeque<char>) -> (String, StringKind) {
+    let next_char = characters.front().unwrap();
+    // Match on the next character to determine what type the next string is
+    match classify_char(next_char) {
+        CharKind::Lowercase => (
+            grab_until(characters, char::is_whitespace),
+            StringKind::Identifier,
+        ),
+        CharKind::Uppercase => (
+            grab_until(characters, char::is_whitespace),
+            StringKind::Keyword,
+        ),
+        CharKind::Numeric => (
+            grab_until(characters, char::is_whitespace),
+            StringKind::Literal,
+        ),
+        // ' or " => literal
+        CharKind::Literal => {
+            // Remove the first quotation mark
+            let string_kind = match characters.pop_front().unwrap() {
+                '\'' => StringKind::Literal,
+                '\"' => StringKind::Identifier,
+                _ => StringKind::None,
+            };
+            let result = (
+                grab_until(characters, |c| c == '\'' || c == '\"'),
+                string_kind,
+            );
+            //Consume the trailing quotation
+            //NOTE: The generic should never trigger since the grab_until function will throw an
+            //error if it never encounters a closing quotation mark
+            match characters.pop_front() {
+                Some('\'') | Some('\"') => {}
+                _ => {}
+            };
+
+            result
+        }
+        // punctuation => symbol
+        CharKind::Symbol => (
+            grab_until(characters, |c| !c.is_ascii_punctuation()),
+            StringKind::Symbol,
+        ),
+        // None as default
+        CharKind::None => (String::new(), StringKind::None),
+    }
+}
+
+fn grab_until<F>(characters: &mut VecDeque<char>, stop_signal: F) -> String
+where
+    F: Fn(char) -> bool,
+{
+    let mut result = String::new();
+
+    // Get the first character
+    let mut current_char = match characters.front() {
+        Some(_) => characters.pop_front().unwrap(),
+        None => return result,
+    };
+    result.push(current_char);
+
+    // Loop while the next character isn't our stop signal
+    while !characters.is_empty() {
+        current_char = match characters.pop_front() {
+            Some(c) => c,
+            None => return result,
+        };
+        if stop_signal(current_char) {
+            break;
+        }
+        result.push(current_char);
+    }
+
+    result
+}
+
+enum StringKind {
+    Keyword,
+    Identifier,
+    Literal,
+    Symbol,
+    None,
+}
+
+enum CharKind {
+    Uppercase,
+    Lowercase,
+    Numeric,
+    Literal,
+    Symbol,
+    None,
+}
+
+fn classify_char(c: &char) -> CharKind {
+    if c.is_ascii_lowercase() {
+        CharKind::Lowercase
+    } else if c.is_ascii_uppercase() {
+        CharKind::Uppercase
+    } else if c.is_ascii_alphanumeric() {
+        CharKind::Numeric
+    } else if *c == '\'' || *c == '\"' {
+        CharKind::Literal
+    } else if c.is_ascii_punctuation() {
+        CharKind::Symbol
+    } else {
+        CharKind::None
+    }
+}
+
+fn transform_symbol(value: String) -> SymbolType {
+    match value.as_str() {
+        "<" => SymbolType::LessThan,
+        "<=" => SymbolType::LessThanEquals,
+        ">" => SymbolType::GreaterThan,
+        ">=" => SymbolType::GreaterThanEquals,
+        "+" => SymbolType::Plus,
+        "+=" => SymbolType::PlusEquals,
+        "-" => SymbolType::Minus,
+        "-=" => SymbolType::MinusEquals,
+        "(" => SymbolType::LParen,
+        ")" => SymbolType::RParen,
+        "," => SymbolType::Comma,
+        "*" => SymbolType::Star,
+        "=" => SymbolType::Equals,
+        ";" => SymbolType::Semicolon,
+        _ => SymbolType::Unknown,
+    }
+}
+
+fn print_characters(characters: &mut VecDeque<char>) {
+    println!();
+    for character in characters {
+        print!("{}", character);
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -269,10 +207,8 @@ impl TokenQueue {
         !self.tokens.is_empty()
     }
 
-    pub fn new(token_vec: Vec<Token>) -> TokenQueue {
-        TokenQueue {
-            tokens: VecDeque::from(token_vec),
-        }
+    pub fn new(tokens: VecDeque<Token>) -> TokenQueue {
+        TokenQueue { tokens }
     }
 
     pub fn validate_token_type(&mut self, token_type: TokenTag) -> Result<Token, SyntaxError> {
@@ -293,6 +229,32 @@ impl TokenQueue {
         }
     }
 
+    pub fn check_next_symbol(&self, symbol_type: Vec<SymbolType>) -> bool {
+        match self.peek() {
+            Some(Token::Symbol(val)) => symbol_type.contains(val),
+            _ => false,
+        }
+    }
+
+    pub fn verify_symbol_type(
+        &mut self,
+        symbol_type: Vec<SymbolType>,
+    ) -> Result<Token, SyntaxError> {
+        match self.peek() {
+            Some(Token::Symbol(t)) => match symbol_type.contains(t) {
+                true => Ok(self.next()?),
+                false => Err(SyntaxError::UnexpectedSymbol(UnexpectedSymbol::new(t))),
+            },
+            Some(val) => Err(SyntaxError::InvalidToken(InvalidToken::new(
+                TokenTag::Symbol,
+                val.tag(),
+            ))),
+            None => Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                TokenTag::Symbol,
+            )))),
+        }
+    }
+
     pub fn validate_token_value(&mut self, value: Vec<&str>) -> Result<Token, SyntaxError> {
         match self.peek() {
             Some(t) => match value.contains(&t.value()) {
@@ -302,7 +264,7 @@ impl TokenQueue {
                 }
                 false => Err(SyntaxError::InvalidValue(InvalidValue::new(
                     value,
-                    t.value(),
+                    t.value().to_string(),
                 ))),
             },
             None => Err(SyntaxError::MissingToken(MissingToken::new(None))),
@@ -352,7 +314,7 @@ pub enum Token {
     Keyword(Keyword),
     Identifier(Identifier),
     Literal(Literal),
-    Symbol(Symbol),
+    Symbol(SymbolType),
 }
 
 impl Token {
@@ -361,7 +323,7 @@ impl Token {
             Token::Keyword(t) => t.value.as_str(),
             Token::Identifier(t) => t.value.as_str(),
             Token::Literal(t) => t.value.as_str(),
-            Token::Symbol(t) => t.value.as_str(),
+            Token::Symbol(t) => t.print_type(),
         }
     }
 
@@ -424,9 +386,45 @@ pub struct Literal {
     pub literal_type: LiteralType,
 }
 
-#[derive(Debug, PartialEq)]
-pub struct Symbol {
-    pub value: String,
+#[derive(Clone, Debug, PartialEq)]
+pub enum SymbolType {
+    Star,
+    Plus,
+    PlusEquals,
+    Minus,
+    MinusEquals,
+    Comma,
+    Equals,
+    LParen,
+    RParen,
+    Semicolon,
+    LessThan,
+    GreaterThan,
+    LessThanEquals,
+    GreaterThanEquals,
+    Unknown,
+}
+
+impl SymbolType {
+    pub fn print_type(&self) -> &str {
+        match self {
+            SymbolType::Star => "Star",
+            SymbolType::Plus => "Plus",
+            SymbolType::PlusEquals => "PlusEquals",
+            SymbolType::Minus => "Minus",
+            SymbolType::MinusEquals => "MinusEquals",
+            SymbolType::Comma => "Comma",
+            SymbolType::Equals => "Equals",
+            SymbolType::LParen => "LParen",
+            SymbolType::RParen => "RParen",
+            SymbolType::Semicolon => "Semicolon",
+            SymbolType::LessThan => "LessThan",
+            SymbolType::GreaterThan => "GreaterThan",
+            SymbolType::LessThanEquals => "LessThanEquals",
+            SymbolType::GreaterThanEquals => "GreaterThanEquals",
+            SymbolType::Unknown => "Unknown",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -437,9 +435,9 @@ mod tests {
     fn test_keyword() {
         assert_eq!(
             tokenize("INSERT").unwrap(),
-            TokenQueue::new(vec![Token::Keyword(Keyword {
+            TokenQueue::new(VecDeque::from([Token::Keyword(Keyword {
                 value: "INSERT".to_string()
-            })],)
+            })]),)
         )
     }
 
@@ -447,9 +445,9 @@ mod tests {
     fn test_no_quote_identifier() {
         assert_eq!(
             tokenize("abc").unwrap(),
-            TokenQueue::new(vec![Token::Identifier(Identifier {
+            TokenQueue::new(VecDeque::from([Token::Identifier(Identifier {
                 value: "abc".to_string()
-            })])
+            })]))
         )
     }
 
@@ -457,9 +455,9 @@ mod tests {
     fn test_quoted_identifier() {
         assert_eq!(
             tokenize("\"two words\"").unwrap(),
-            TokenQueue::new(vec![Token::Identifier(Identifier {
+            TokenQueue::new(VecDeque::from([Token::Identifier(Identifier {
                 value: "two words".to_string()
-            })])
+            })]))
         )
     }
 
@@ -467,10 +465,10 @@ mod tests {
     fn test_string_literal() {
         assert_eq!(
             tokenize("\'abc\'").unwrap(),
-            TokenQueue::new(vec![Token::Literal(Literal {
+            TokenQueue::new(VecDeque::from([Token::Literal(Literal {
                 value: "abc".to_string(),
                 literal_type: LiteralType::String,
-            })])
+            })]))
         )
     }
 
@@ -478,10 +476,10 @@ mod tests {
     fn test_int_literal() {
         assert_eq!(
             tokenize("123").unwrap(),
-            TokenQueue::new(vec![Token::Literal(Literal {
+            TokenQueue::new(VecDeque::from([Token::Literal(Literal {
                 value: "123".to_string(),
                 literal_type: LiteralType::Integer
-            })])
+            })]))
         )
     }
 
@@ -489,38 +487,18 @@ mod tests {
     fn test_symbols() {
         assert_eq!(
             tokenize("< > ( ) * , = + - ; ").unwrap(),
-            TokenQueue::new(vec![
-                Token::Symbol(Symbol {
-                    value: "LESSTHAN".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "GREATERTHAN".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "LPAREN".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "RPAREN".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "STAR".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "COMMA".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "EQUAL".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "PLUS".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "MINUS".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "SEMICOLON".to_string()
-                }),
-            ])
+            TokenQueue::new(VecDeque::from([
+                Token::Symbol(SymbolType::LessThan),
+                Token::Symbol(SymbolType::GreaterThan),
+                Token::Symbol(SymbolType::LParen),
+                Token::Symbol(SymbolType::RParen),
+                Token::Symbol(SymbolType::Star),
+                Token::Symbol(SymbolType::Comma),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::Plus),
+                Token::Symbol(SymbolType::Minus),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
         )
     }
 
@@ -528,20 +506,12 @@ mod tests {
     fn test_compound_symbols() {
         assert_eq!(
             tokenize("<= >= += -=").unwrap(),
-            TokenQueue::new(vec![
-                Token::Symbol(Symbol {
-                    value: "LESSTHANEQUAL".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "GREATERTHANEQUAL".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "PLUSEQUAL".to_string()
-                }),
-                Token::Symbol(Symbol {
-                    value: "MINUSEQUAL".to_string()
-                }),
-            ])
+            TokenQueue::new(VecDeque::from([
+                Token::Symbol(SymbolType::LessThanEquals),
+                Token::Symbol(SymbolType::GreaterThanEquals),
+                Token::Symbol(SymbolType::PlusEquals),
+                Token::Symbol(SymbolType::MinusEquals),
+            ]))
         )
     }
 
@@ -549,7 +519,7 @@ mod tests {
     fn test_mixed_literals() {
         assert_eq!(
             tokenize("123 'abc' 456 'def'").unwrap(),
-            TokenQueue::new(vec![
+            TokenQueue::new(VecDeque::from([
                 Token::Literal(Literal {
                     value: "123".to_string(),
                     literal_type: LiteralType::Integer
@@ -566,7 +536,7 @@ mod tests {
                     value: "def".to_string(),
                     literal_type: LiteralType::String,
                 })
-            ])
+            ]))
         )
     }
 
@@ -574,7 +544,7 @@ mod tests {
     fn test_mixed_quotes() {
         assert_eq!(
             tokenize("\"abc\" 'def' \"ghi\" 'jkl'").unwrap(),
-            TokenQueue::new(vec![
+            TokenQueue::new(VecDeque::from([
                 Token::Identifier(Identifier {
                     value: "abc".to_string()
                 }),
@@ -589,7 +559,7 @@ mod tests {
                     value: "jkl".to_string(),
                     literal_type: LiteralType::String,
                 }),
-            ])
+            ]))
         )
     }
 }
