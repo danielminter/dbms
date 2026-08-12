@@ -1,4 +1,4 @@
-use crate::tokenizer::TokenTag;
+use crate::tokenizer::{SymbolType, TokenTag};
 
 pub trait Printable {
     fn message(&self) -> String;
@@ -8,6 +8,7 @@ pub enum SyntaxError {
     InvalidValue(InvalidValue),
     InvalidToken(InvalidToken),
     MissingToken(MissingToken),
+    UnexpectedSymbol(UnexpectedSymbol),
     GenericSyntaxError(GenericSyntaxError),
 }
 
@@ -17,10 +18,10 @@ pub struct InvalidValue {
 }
 
 impl InvalidValue {
-    pub fn new(expected: Vec<&str>, encountered: &str) -> InvalidValue {
+    pub fn new(expected: Vec<&str>, encountered: String) -> InvalidValue {
         InvalidValue {
             expected: expected.iter().map(|s| s.to_string()).collect(),
-            encountered: encountered.to_string(),
+            encountered,
         }
     }
 }
@@ -46,6 +47,7 @@ impl Printable for SyntaxError {
         match self {
             SyntaxError::InvalidValue(t) => t.message(),
             SyntaxError::InvalidToken(t) => t.message(),
+            SyntaxError::UnexpectedSymbol(t) => t.message(),
             SyntaxError::MissingToken(t) => t.message(),
             SyntaxError::GenericSyntaxError(t) => t.message(),
         }
@@ -92,6 +94,24 @@ impl Printable for MissingToken {
             Some(t) => format!("Missing token. Expected: {}", t.to_string()),
             None => "Missing token".to_string(),
         }
+    }
+}
+
+pub struct UnexpectedSymbol {
+    encountered: SymbolType,
+}
+
+impl UnexpectedSymbol {
+    pub fn new(encountered: &SymbolType) -> UnexpectedSymbol {
+        UnexpectedSymbol {
+            encountered: encountered.clone(),
+        }
+    }
+}
+
+impl Printable for UnexpectedSymbol {
+    fn message(&self) -> String {
+        format!("Unexpected symbol: {}", self.encountered.print_type())
     }
 }
 
