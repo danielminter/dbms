@@ -1,5 +1,7 @@
-use crate::errors::{GenericSyntaxError, InvalidToken, InvalidValue, MissingToken, SyntaxError};
-use crate::tokenizer::{Literal, Token, TokenQueue, TokenTag};
+use crate::errors::{
+    GenericSyntaxError, InvalidToken, InvalidValue, MissingToken, SyntaxError, UnexpectedSymbol,
+};
+use crate::tokenizer::{Literal, SymbolType, Token, TokenQueue, TokenTag};
 
 pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
     input.print_queue();
@@ -54,7 +56,7 @@ fn build_insert_tree(queue: &mut TokenQueue) -> Result<InsertNode, SyntaxError> 
     // Verify that the next token is "VALUES"
     queue.validate_token_value(vec!["VALUES"])?;
     // Verify that the next token is "LPAREN"
-    queue.validate_token_value(vec!["LPAREN"])?;
+    queue.verify_symbol_type(vec![SymbolType::LParen])?;
     // Loop until we find a "RPAREN"
     let mut rows: Vec<Vec<Literal>> = vec![];
     'rows: loop {
@@ -62,18 +64,15 @@ fn build_insert_tree(queue: &mut TokenQueue) -> Result<InsertNode, SyntaxError> 
         'values: loop {
             let next = match queue.next() {
                 Ok(Token::Literal(t)) => t,
-                Ok(Token::Symbol(s)) => match s.value.as_str() {
+                Ok(Token::Symbol(s)) => match s {
                     // followed by a "COMMA"
-                    "COMMA" => continue 'values,
+                    SymbolType::Comma => continue 'values,
                     // An "LPAREN" here means we're processing another row,
                     // TODO: Catch this correctly and enforce the right syntax
-                    "LPAREN" => continue 'values,
-                    "RPAREN" => break 'values,
+                    SymbolType::LParen => continue 'values,
+                    SymbolType::RParen => break 'values,
                     val => {
-                        return Err(SyntaxError::InvalidValue(InvalidValue::new(
-                            vec![",", "(", ")"],
-                            val,
-                        )));
+                        return Err(SyntaxError::UnexpectedSymbol(UnexpectedSymbol::new(&val)));
                     }
                 },
                 _ => {
@@ -89,21 +88,18 @@ fn build_insert_tree(queue: &mut TokenQueue) -> Result<InsertNode, SyntaxError> 
 
         match queue.next() {
             Ok(t) => match t {
-                Token::Symbol(t) => match t.value.as_str() {
+                Token::Symbol(t) => match t {
                     // If we find a "COMMA" after the "RPAREN", loop again for another row
-                    "COMMA" => continue 'rows,
-                    "SEMICOLON" => break 'rows,
+                    SymbolType::Comma => continue 'rows,
+                    SymbolType::Semicolon => break 'rows,
                     val => {
-                        return Err(SyntaxError::InvalidValue(InvalidValue::new(
-                            vec![",", ";"],
-                            val,
-                        )));
+                        return Err(SyntaxError::UnexpectedSymbol(UnexpectedSymbol::new(&val)));
                     }
                 },
                 val => {
-                    return Err(SyntaxError::InvalidValue(InvalidValue::new(
-                        vec!["symbol"],
-                        val.value(),
+                    return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                        TokenTag::Symbol,
+                        val.tag(),
                     )));
                 }
             },
@@ -157,13 +153,10 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
             Token::Identifier(t) => {
                 columns.push(Token::Identifier(t));
             }
-            Token::Symbol(s) => match s.value.as_str() {
-                "STAR" => columns.push(Token::Symbol(s)),
+            Token::Symbol(s) => match s {
+                SymbolType::Star => columns.push(Token::Symbol(s)),
                 val => {
-                    return Err(SyntaxError::InvalidValue(InvalidValue::new(
-                        vec!["identifier"],
-                        val,
-                    )));
+                    return Err(SyntaxError::UnexpectedSymbol(UnexpectedSymbol::new(&val)));
                 }
             },
             val => {
@@ -188,9 +181,9 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
                 columns.push(queue.next()?);
                 continue;
             }
-            // If its a comma, keep going
+            // If its a comma, keep going, other symbols will error out
             TokenTag::Symbol => {
-                if queue.next_token_contains(vec!["COMMA"]) {
+                if queue.check_next_symbol(vec![SymbolType::Comma]) {
                     continue;
                 } else {
                     return Err(SyntaxError::InvalidValue(InvalidValue::new(
@@ -211,7 +204,7 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
     let mut conditions: Vec<(Token, Option<Token>, Option<Token>)> = vec![];
 
     // Check for an ending Semicolon
-    while !queue.next_token_contains(vec!["SEMICOLON"]) {
+    while !queue.check_next_symbol(vec![SymbolType::Semicolon]) {
         // If there is a WHERE, Loop over values creating conditions
         // TODO: Handle conditions wrapped in parenthesis
         if queue.next_token_contains(vec!["WHERE"]) {
@@ -221,7 +214,7 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
             queue.print_queue();
             'conditions: loop {
                 // Exit condition
-                if queue.next_token_contains(vec!["SEMICOLON"]) || !queue.has_tokens() {
+                if queue.check_next_symbol(vec![SymbolType::Semicolon]) || !queue.has_tokens() {
                     break 'conditions;
                 }
 
@@ -243,7 +236,7 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
     }
 
     // Double check that we have an ending semicolon
-    queue.validate_token_value(vec!["SEMICOLON"])?;
+    queue.verify_symbol_type(vec![SymbolType::Semicolon])?;
 
     // Construct the ast from bottom up
 
@@ -260,16 +253,8 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
                 };
                 let operator = OperatorNode {
                     operator: match current.1.as_ref() {
-                        Some(val) => match val {
-                            Token::Symbol(t) => t.value.clone(),
-                            t => {
-                                return Err(SyntaxError::InvalidToken(InvalidToken::new(
-                                    TokenTag::Symbol,
-                                    t.tag(),
-                                )));
-                            }
-                        },
-                        None => {
+                        Some(Token::Symbol(val)) => val.clone(),
+                        _ => {
                             return Err(SyntaxError::GenericSyntaxError(GenericSyntaxError::new(
                                 "Invalid condition construction",
                             )));
@@ -324,8 +309,8 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
 
     for column in columns {
         let c: IdentifierNode = match column {
-            Token::Symbol(s) => IdentifierNode {
-                identifier: s.value,
+            Token::Symbol(SymbolType::Star) => IdentifierNode {
+                identifier: "STAR".to_string(),
             },
             Token::Identifier(i) => IdentifierNode {
                 identifier: i.value,
@@ -362,14 +347,15 @@ fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> 
     // Make sure the next token is VALUES and discard
     queue.validate_token_value(vec!["VALUES"])?;
     // Check that an LPAREN is next then discard
-    queue.validate_token_value(vec!["LPAREN"])?;
+    queue.verify_symbol_type(vec![SymbolType::LParen])?;
 
     let mut columns: Vec<(Token, Vec<Option<Token>>)> = vec![];
 
     // Loop over remaining tokens
     'columns: loop {
         // Break if we hit an RPAREN
-        if queue.validate_token_value(vec!["RPAREN"]).is_ok() {
+        if queue.check_next_symbol(vec![SymbolType::RParen]) {
+            queue.next()?;
             break 'columns;
         }
 
@@ -378,7 +364,7 @@ fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> 
         // Loop until a commma or an RPAREN
         let mut constraints: Vec<Option<Token>> = vec![];
         'constraints: loop {
-            if queue.next_token_contains(vec!["RPAREN", "COMMA"]) {
+            if queue.check_next_symbol(vec![SymbolType::RParen, SymbolType::Comma]) {
                 break 'constraints;
             }
 
@@ -392,7 +378,7 @@ fn build_create_tree(queue: &mut TokenQueue) -> Result<CreateNode, SyntaxError> 
     }
 
     // Check that it ends with SEMICOLON
-    queue.validate_token_value(vec!["SEMICOLON"])?;
+    queue.verify_symbol_type(vec![SymbolType::Semicolon])?;
 
     // Construct the tree from bottom up.
     let mut column_nodes: Vec<ColumnNode> = vec![];
@@ -537,7 +523,7 @@ impl ConditionNode {
 
 #[derive(Debug)]
 pub struct OperatorNode {
-    pub operator: String,
+    pub operator: SymbolType,
 }
 
 #[derive(Debug)]
@@ -547,9 +533,11 @@ pub struct LogicalNode {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use crate::{
         errors::Printable,
-        tokenizer::{Identifier, Keyword, Literal, Symbol},
+        tokenizer::{Identifier, Keyword, Literal, SymbolType},
     };
 
     use super::*;
@@ -569,19 +557,13 @@ mod tests {
             Token::Keyword(Keyword {
                 value: "VALUES".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "LPAREN".to_string(),
-            }),
+            Token::Symbol(SymbolType::LParen),
             Token::Identifier(Identifier {
                 value: "id".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "RPAREN".to_string(),
-            }),
-            Token::Symbol(Symbol {
-                value: "SEMICOLON".to_string(),
-            }),
-        ]);
+            Token::Symbol(SymbolType::RParen),
+            Token::Symbol(SymbolType::Semicolon),
+        ]));
 
         let node = match create_ast(command) {
             Ok(RootNode::Create(val)) => val,
@@ -629,10 +611,8 @@ mod tests {
             Token::Keyword(Keyword {
                 value: "TABLE".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "LPAREN".to_string(),
-            }),
-        ]);
+            Token::Symbol(SymbolType::LParen),
+        ]));
 
         assert!(create_ast(command).is_err());
     }
@@ -643,19 +623,15 @@ mod tests {
             Token::Keyword(Keyword {
                 value: "SELECT".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "STAR".to_string(),
-            }),
+            Token::Symbol(SymbolType::Star),
             Token::Keyword(Keyword {
                 value: "FROM".to_string(),
             }),
             Token::Identifier(Identifier {
                 value: "users".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "SEMICOLON".to_string(),
-            }),
-        ]);
+            Token::Symbol(SymbolType::Semicolon),
+        ]));
 
         let node = match create_ast(command) {
             Ok(RootNode::Select(val)) => val,
@@ -682,34 +658,24 @@ mod tests {
             Token::Keyword(Keyword {
                 value: "VALUES".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "LPAREN".to_string(),
-            }),
+            Token::Symbol(SymbolType::LParen),
             Token::Literal(Literal {
                 value: "1".to_string(),
                 literal_type: LiteralType::Integer,
             }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
+            Token::Symbol(SymbolType::Comma),
             Token::Literal(Literal {
                 value: "daniel".to_string(),
                 literal_type: LiteralType::String,
             }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
+            Token::Symbol(SymbolType::Comma),
             Token::Literal(Literal {
                 value: "24".to_string(),
                 literal_type: LiteralType::Integer,
             }),
-            Token::Symbol(Symbol {
-                value: "RPAREN".to_string(),
-            }),
-            Token::Symbol(Symbol {
-                value: "SEMICOLON".to_string(),
-            }),
-        ]);
+            Token::Symbol(SymbolType::RParen),
+            Token::Symbol(SymbolType::Semicolon),
+        ]));
 
         let completed_tree = create_ast(command);
 
@@ -746,61 +712,41 @@ mod tests {
             Token::Keyword(Keyword {
                 value: "VALUES".to_string(),
             }),
-            Token::Symbol(Symbol {
-                value: "LPAREN".to_string(),
-            }),
+            Token::Symbol(SymbolType::LParen),
             Token::Literal(Literal {
                 value: "1".to_string(),
                 literal_type: LiteralType::Integer,
             }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
+            Token::Symbol(SymbolType::Comma),
             Token::Literal(Literal {
                 value: "daniel".to_string(),
                 literal_type: LiteralType::String,
             }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
+            Token::Symbol(SymbolType::Comma),
             Token::Literal(Literal {
                 value: "24".to_string(),
                 literal_type: LiteralType::Integer,
             }),
-            Token::Symbol(Symbol {
-                value: "RPAREN".to_string(),
-            }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
-            Token::Symbol(Symbol {
-                value: "LPAREN".to_string(),
-            }),
+            Token::Symbol(SymbolType::RParen),
+            Token::Symbol(SymbolType::Comma),
+            Token::Symbol(SymbolType::LParen),
             Token::Literal(Literal {
                 value: "2".to_string(),
                 literal_type: LiteralType::Integer,
             }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
+            Token::Symbol(SymbolType::Comma),
             Token::Literal(Literal {
                 value: "minter".to_string(),
                 literal_type: LiteralType::String,
             }),
-            Token::Symbol(Symbol {
-                value: "COMMA".to_string(),
-            }),
+            Token::Symbol(SymbolType::Comma),
             Token::Literal(Literal {
                 value: "42".to_string(),
                 literal_type: LiteralType::Integer,
             }),
-            Token::Symbol(Symbol {
-                value: "RPAREN".to_string(),
-            }),
-            Token::Symbol(Symbol {
-                value: "SEMICOLON".to_string(),
-            }),
-        ]);
+            Token::Symbol(SymbolType::RParen),
+            Token::Symbol(SymbolType::Semicolon),
+        ]));
 
         let node = match create_ast(command) {
             Ok(RootNode::Insert(val)) => val,
