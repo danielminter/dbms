@@ -22,7 +22,7 @@ pub fn create_ast(mut input: TokenQueue) -> Result<RootNode, SyntaxError> {
             t => {
                 return Err(SyntaxError::InvalidValue(InvalidValue::new(
                     vec!["Keyword"],
-                    t,
+                    t.to_string(),
                 )));
             }
         },
@@ -154,9 +154,9 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
                 }
             },
             val => {
-                return Err(SyntaxError::InvalidValue(InvalidValue::new(
-                    vec!["identifier"],
-                    val.value(),
+                return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                    TokenTag::Identifier,
+                    val.tag(),
                 )));
             }
         },
@@ -180,9 +180,9 @@ fn build_select_tree(queue: &mut TokenQueue) -> Result<SelectNode, SyntaxError> 
                 if queue.check_next_symbol(vec![SymbolType::Comma]) {
                     continue;
                 } else {
-                    return Err(SyntaxError::InvalidValue(InvalidValue::new(
-                        vec![","],
-                        queue.next()?.value(),
+                    return Err(SyntaxError::InvalidToken(InvalidToken::new(
+                        TokenTag::Identifier,
+                        TokenTag::Symbol,
                     )));
                 }
             }
@@ -533,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_simple_create() {
-        let command: TokenQueue = TokenQueue::new(vec![
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([
             Token::Keyword(Keyword {
                 value: "CREATE".to_string(),
             }),
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_missing_create_keyword() {
-        let command: TokenQueue = TokenQueue::new(vec![Token::Keyword(Keyword {
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([Token::Keyword(Keyword {
             value: "NOT_CREATE".to_string(),
         })]));
 
@@ -577,21 +577,21 @@ mod tests {
 
     #[test]
     fn test_missing_table_keyword() {
-        let command: TokenQueue = TokenQueue::new(vec![
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([
             Token::Keyword(Keyword {
                 value: "CREATE".to_string(),
             }),
             Token::Keyword(Keyword {
                 value: "NOT_TABLE".to_string(),
             }),
-        ]);
+        ]));
 
         assert!(create_ast(command).is_err());
     }
 
     #[test]
     fn test_wrong_token_type() {
-        let command: TokenQueue = TokenQueue::new(vec![
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([
             Token::Keyword(Keyword {
                 value: "CREATE".to_string(),
             }),
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_simple_select() {
-        let command: TokenQueue = TokenQueue::new(vec![
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([
             Token::Keyword(Keyword {
                 value: "SELECT".to_string(),
             }),
@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn test_simple_insert() {
-        let command: TokenQueue = TokenQueue::new(vec![
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([
             Token::Keyword(Keyword {
                 value: "INSERT".to_string(),
             }),
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_multi_row_insert() {
-        let command: TokenQueue = TokenQueue::new(vec![
+        let command: TokenQueue = TokenQueue::new(VecDeque::from([
             Token::Keyword(Keyword {
                 value: "INSERT".to_string(),
             }),
