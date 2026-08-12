@@ -4,6 +4,7 @@ pub trait Printable {
     fn message(&self) -> String;
 }
 
+#[derive(Debug)]
 pub enum SyntaxError {
     InvalidValue(InvalidValue),
     InvalidToken(InvalidToken),
@@ -12,6 +13,7 @@ pub enum SyntaxError {
     GenericSyntaxError(GenericSyntaxError),
 }
 
+#[derive(Debug)]
 pub struct InvalidValue {
     expected: Vec<String>,
     encountered: String,
@@ -54,6 +56,7 @@ impl Printable for SyntaxError {
     }
 }
 
+#[derive(Debug)]
 pub struct InvalidToken {
     expected: TokenTag,
     encountered: TokenTag,
@@ -78,6 +81,7 @@ impl Printable for InvalidToken {
     }
 }
 
+#[derive(Debug)]
 pub struct MissingToken {
     expected: Option<TokenTag>,
 }
@@ -97,6 +101,7 @@ impl Printable for MissingToken {
     }
 }
 
+#[derive(Debug)]
 pub struct UnexpectedSymbol {
     encountered: SymbolType,
 }
@@ -115,6 +120,7 @@ impl Printable for UnexpectedSymbol {
     }
 }
 
+#[derive(Debug)]
 pub struct GenericSyntaxError {
     msg: String,
 }

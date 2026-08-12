@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
-    let mut characters: VecDeque<char> = text.chars().collect();
+    let mut characters: VecDeque<char> = text.trim().chars().collect();
 
     // Turn the vecdeque into a vec of individual strings
     let mut statement_strings = statement_to_strings(&mut characters);
@@ -65,16 +65,21 @@ fn parse_single_string(characters: &mut VecDeque<char>) -> (String, StringKind) 
     let next_char = characters.front().unwrap();
     // Match on the next character to determine what type the next string is
     match classify_char(next_char) {
+        // Remove the whitespace and recursively call itself to keep parsing
+        CharKind::Whitespace => {
+            characters.pop_front();
+            parse_single_string(characters)
+        }
         CharKind::Lowercase => (
-            grab_until(characters, char::is_whitespace),
+            grab_until(characters, |c| !c.is_ascii_lowercase()),
             StringKind::Identifier,
         ),
         CharKind::Uppercase => (
-            grab_until(characters, char::is_whitespace),
+            grab_until(characters, |c| !c.is_ascii_uppercase()),
             StringKind::Keyword,
         ),
         CharKind::Numeric => (
-            grab_until(characters, char::is_whitespace),
+            grab_until(characters, |c| !c.is_ascii_alphanumeric()),
             StringKind::Literal,
         ),
         // ' or " => literal
@@ -90,20 +95,13 @@ fn parse_single_string(characters: &mut VecDeque<char>) -> (String, StringKind) 
                 string_kind,
             );
             //Consume the trailing quotation
-            //NOTE: The generic should never trigger since the grab_until function will throw an
-            //error if it never encounters a closing quotation mark
-            match characters.pop_front() {
-                Some('\'') | Some('\"') => {}
-                _ => {}
-            };
+            characters.pop_front();
 
             result
         }
-        // punctuation => symbol
-        CharKind::Symbol => (
-            grab_until(characters, |c| !c.is_ascii_punctuation()),
-            StringKind::Symbol,
-        ),
+        // punctuation => symbol, The empty closure will force a single character to be parsed every
+        // time
+        CharKind::Symbol => (grab_until(characters, |_| true), StringKind::Symbol),
         // None as default
         CharKind::None => (String::new(), StringKind::None),
     }
@@ -124,14 +122,14 @@ where
 
     // Loop while the next character isn't our stop signal
     while !characters.is_empty() {
-        current_char = match characters.pop_front() {
-            Some(c) => c,
+        current_char = match characters.front() {
+            Some(c) => *c,
             None => return result,
         };
         if stop_signal(current_char) {
             break;
         }
-        result.push(current_char);
+        result.push(characters.pop_front().unwrap());
     }
 
     result
@@ -146,6 +144,7 @@ enum StringKind {
 }
 
 enum CharKind {
+    Whitespace,
     Uppercase,
     Lowercase,
     Numeric,
@@ -155,7 +154,9 @@ enum CharKind {
 }
 
 fn classify_char(c: &char) -> CharKind {
-    if c.is_ascii_lowercase() {
+    if c.is_whitespace() {
+        CharKind::Whitespace
+    } else if c.is_ascii_lowercase() {
         CharKind::Lowercase
     } else if c.is_ascii_uppercase() {
         CharKind::Uppercase
@@ -173,13 +174,9 @@ fn classify_char(c: &char) -> CharKind {
 fn transform_symbol(value: String) -> SymbolType {
     match value.as_str() {
         "<" => SymbolType::LessThan,
-        "<=" => SymbolType::LessThanEquals,
         ">" => SymbolType::GreaterThan,
-        ">=" => SymbolType::GreaterThanEquals,
         "+" => SymbolType::Plus,
-        "+=" => SymbolType::PlusEquals,
         "-" => SymbolType::Minus,
-        "-=" => SymbolType::MinusEquals,
         "(" => SymbolType::LParen,
         ")" => SymbolType::RParen,
         "," => SymbolType::Comma,
@@ -337,7 +334,7 @@ impl Token {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TokenTag {
     Keyword,
     Identifier,
@@ -390,9 +387,7 @@ pub struct Literal {
 pub enum SymbolType {
     Star,
     Plus,
-    PlusEquals,
     Minus,
-    MinusEquals,
     Comma,
     Equals,
     LParen,
@@ -400,8 +395,6 @@ pub enum SymbolType {
     Semicolon,
     LessThan,
     GreaterThan,
-    LessThanEquals,
-    GreaterThanEquals,
     Unknown,
 }
 
@@ -410,9 +403,7 @@ impl SymbolType {
         match self {
             SymbolType::Star => "Star",
             SymbolType::Plus => "Plus",
-            SymbolType::PlusEquals => "PlusEquals",
             SymbolType::Minus => "Minus",
-            SymbolType::MinusEquals => "MinusEquals",
             SymbolType::Comma => "Comma",
             SymbolType::Equals => "Equals",
             SymbolType::LParen => "LParen",
@@ -420,8 +411,6 @@ impl SymbolType {
             SymbolType::Semicolon => "Semicolon",
             SymbolType::LessThan => "LessThan",
             SymbolType::GreaterThan => "GreaterThan",
-            SymbolType::LessThanEquals => "LessThanEquals",
-            SymbolType::GreaterThanEquals => "GreaterThanEquals",
             SymbolType::Unknown => "Unknown",
         }
     }
@@ -486,7 +475,7 @@ mod tests {
     #[test]
     fn test_symbols() {
         assert_eq!(
-            tokenize("< > ( ) * , = + - ; ").unwrap(),
+            tokenize("< > ( ) * , = + - ;").unwrap(),
             TokenQueue::new(VecDeque::from([
                 Token::Symbol(SymbolType::LessThan),
                 Token::Symbol(SymbolType::GreaterThan),
@@ -507,10 +496,14 @@ mod tests {
         assert_eq!(
             tokenize("<= >= += -=").unwrap(),
             TokenQueue::new(VecDeque::from([
-                Token::Symbol(SymbolType::LessThanEquals),
-                Token::Symbol(SymbolType::GreaterThanEquals),
-                Token::Symbol(SymbolType::PlusEquals),
-                Token::Symbol(SymbolType::MinusEquals),
+                Token::Symbol(SymbolType::LessThan),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::GreaterThan),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::Plus),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::Minus),
+                Token::Symbol(SymbolType::Equals),
             ]))
         )
     }
@@ -559,6 +552,180 @@ mod tests {
                     value: "jkl".to_string(),
                     literal_type: LiteralType::String,
                 }),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_create_command() {
+        assert_eq!(
+            tokenize("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);")
+                .unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "CREATE".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "TABLE".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Symbol(SymbolType::LParen),
+                Token::Identifier(Identifier {
+                    value: "id".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "INTEGER".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "PRIMARY".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "KEY".to_string()
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Identifier(Identifier {
+                    value: "name".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "TEXT".to_string()
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Identifier(Identifier {
+                    value: "age".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "INTEGER".to_string()
+                }),
+                Token::Symbol(SymbolType::RParen),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_insert_command() {
+        assert_eq!(
+            tokenize("INSERT INTO users VALUES (1, 'daniel', 24);").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "INSERT".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "INTO".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "VALUES".to_string()
+                }),
+                Token::Symbol(SymbolType::LParen),
+                Token::Literal(Literal {
+                    value: "1".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Literal(Literal {
+                    value: "daniel".to_string(),
+                    literal_type: LiteralType::String
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Literal(Literal {
+                    value: "24".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Symbol(SymbolType::RParen),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_select_command_with_wildcard() {
+        assert_eq!(
+            tokenize("SELECT * FROM users;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "SELECT".to_string()
+                }),
+                Token::Symbol(SymbolType::Star),
+                Token::Keyword(Keyword {
+                    value: "FROM".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_select_command_with_conditions() {
+        assert_eq!(
+            tokenize("SELECT name, age FROM users WHERE id = 1;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "SELECT".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "name".to_string()
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Identifier(Identifier {
+                    value: "age".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "FROM".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "WHERE".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "id".to_string()
+                }),
+                Token::Symbol(SymbolType::Equals),
+                Token::Literal(Literal {
+                    value: "1".to_string(),
+                    literal_type: LiteralType::Integer,
+                }),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_select_command_with_conditions_and_wildcard() {
+        assert_eq!(
+            tokenize("SELECT * FROM users WHERE age > 20;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "SELECT".to_string()
+                }),
+                Token::Symbol(SymbolType::Star),
+                Token::Keyword(Keyword {
+                    value: "FROM".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "WHERE".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "age".to_string()
+                }),
+                Token::Symbol(SymbolType::GreaterThan),
+                Token::Literal(Literal {
+                    value: "20".to_string(),
+                    literal_type: LiteralType::Integer,
+                }),
+                Token::Symbol(SymbolType::Semicolon),
             ]))
         )
     }
