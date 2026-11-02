@@ -1,5 +1,8 @@
+mod cursor;
 pub mod errors;
+mod pager;
 mod parser;
+mod serializer;
 mod tokenizer;
 
 use std::io::{self, Write};
