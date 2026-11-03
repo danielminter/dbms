@@ -1,234 +1,418 @@
 use std::{
     collections::VecDeque,
-    io::{self, Error},
-    os::raw::c_int,
+    io::{self},
+    thread::current,
 };
 
-pub fn tokenize(text: &str) -> Vec<Token> {
-    let separated_tokens = seperate_tokens(text).unwrap_or(vec![]);
-    tokenize_strings(separated_tokens)
+use crate::{
+    errors::{InvalidToken, InvalidValue, MissingToken, SyntaxError, UnexpectedSymbol},
+    parser::LiteralType,
+};
+
+pub fn tokenize(text: &str) -> Result<TokenQueue, io::Error> {
+    let mut characters: VecDeque<char> = text.trim().chars().collect();
+
+    // Turn the vecdeque into a vec of individual strings
+    let mut statement_strings = statement_to_strings(&mut characters);
+
+    // Convert the strings to tokens
+    let tokens: VecDeque<Token> = transform_to_tokens(&mut statement_strings);
+
+    Ok(TokenQueue::new(tokens))
 }
 
-fn tokenize_strings(strings: Vec<String>) -> Vec<Token> {
-    let mut queue = VecDeque::from(strings);
-    let mut tokens: Vec<Token> = vec![];
-
-    while queue.front() != None {
-        let sequence: Vec<String> = vec![];
-
-        let next = queue.pop_front();
-
-        if next.unwrap().as_str() == "CREATE" {
-            match queue.pop_front().unwrap().as_str() {
-                "TABLE" => {
-                    let token = Token::Keyword(Keyword::new("CREATE TABLE".to_string()));
-                    tokens.push(token);
-                }
-
-                _ => {}
+fn transform_to_tokens(strings: &mut VecDeque<(String, StringKind)>) -> VecDeque<Token> {
+    let mut result_queue: VecDeque<Token> = VecDeque::new();
+    while !strings.is_empty() {
+        let (value, current_string_type) = strings.pop_front().unwrap();
+        match current_string_type {
+            StringKind::Keyword => {
+                result_queue.push_back(Token::Keyword(Keyword { value }));
             }
+            StringKind::Identifier => {
+                result_queue.push_back(Token::Identifier(Identifier { value }));
+            }
+            StringKind::Literal => {
+                let mut literal_type = LiteralType::String;
+                if !value.chars().next().unwrap().is_ascii_alphabetic() {
+                    literal_type = LiteralType::Integer;
+                }
+                result_queue.push_back(Token::Literal(Literal {
+                    value,
+                    literal_type,
+                }));
+            }
+            StringKind::Symbol => {
+                result_queue.push_back(Token::Symbol(transform_symbol(value)));
+            }
+            StringKind::None => todo!(),
         }
     }
-    vec![]
+
+    result_queue
 }
 
-fn pop_until(mut queue: VecDeque<String>, value: &str) -> (VecDeque<String>, Vec<String>) {
-    let mut slice: VecDeque<String> = VecDeque::new();
+fn statement_to_strings(strings: &mut VecDeque<char>) -> VecDeque<(String, StringKind)> {
+    let mut result_vec: VecDeque<(String, StringKind)> = VecDeque::new();
+    while !strings.is_empty() {
+        result_vec.push_back(parse_single_string(strings));
+    }
 
-    for item in queue {
-        if item != value.to_string() {
-            slice.push_back(item);
-        } else {
+    result_vec
+}
+
+fn parse_single_string(characters: &mut VecDeque<char>) -> (String, StringKind) {
+    let next_char = characters.front().unwrap();
+    // Match on the next character to determine what type the next string is
+    match classify_char(next_char) {
+        // Remove the whitespace and recursively call itself to keep parsing
+        CharKind::Whitespace => {
+            characters.pop_front();
+            parse_single_string(characters)
+        }
+        CharKind::Lowercase => (
+            grab_until(characters, |c| !c.is_ascii_lowercase()),
+            StringKind::Identifier,
+        ),
+        CharKind::Uppercase => (
+            grab_until(characters, |c| !c.is_ascii_uppercase()),
+            StringKind::Keyword,
+        ),
+        CharKind::Numeric => (
+            grab_until(characters, |c| !c.is_ascii_alphanumeric()),
+            StringKind::Literal,
+        ),
+        // ' or " => literal
+        CharKind::Literal => {
+            // Remove the first quotation mark
+            let string_kind = match characters.pop_front().unwrap() {
+                '\'' => StringKind::Literal,
+                '\"' => StringKind::Identifier,
+                _ => StringKind::None,
+            };
+            let result = (
+                grab_until(characters, |c| c == '\'' || c == '\"'),
+                string_kind,
+            );
+            //Consume the trailing quotation
+            characters.pop_front();
+
+            result
+        }
+        // punctuation => symbol, The empty closure will force a single character to be parsed every
+        // time
+        CharKind::Symbol => (grab_until(characters, |_| true), StringKind::Symbol),
+        // None as default
+        CharKind::None => (String::new(), StringKind::None),
+    }
+}
+
+fn grab_until<F>(characters: &mut VecDeque<char>, stop_signal: F) -> String
+where
+    F: Fn(char) -> bool,
+{
+    let mut result = String::new();
+
+    // Get the first character
+    let mut current_char = match characters.front() {
+        Some(_) => characters.pop_front().unwrap(),
+        None => return result,
+    };
+    result.push(current_char);
+
+    // Loop while the next character isn't our stop signal
+    while !characters.is_empty() {
+        current_char = match characters.front() {
+            Some(c) => *c,
+            None => return result,
+        };
+        if stop_signal(current_char) {
             break;
         }
+        result.push(characters.pop_front().unwrap());
     }
 
-    (VecDeque::new(), vec![])
+    result
 }
 
-// TODO: Error Handling
-pub fn seperate_tokens(text: &str) -> Result<Vec<String>, Error> {
-    // convert_strings(split_text)
-    let mut token_strings: Vec<String> = vec![];
-    let characters: Vec<char> = text.chars().collect();
+enum StringKind {
+    Keyword,
+    Identifier,
+    Literal,
+    Symbol,
+    None,
+}
 
-    let mut index: usize = 0;
+enum CharKind {
+    Whitespace,
+    Uppercase,
+    Lowercase,
+    Numeric,
+    Literal,
+    Symbol,
+    None,
+}
 
-    // Main parsing loop
-    'parsing: loop {
-        // Break out if we're at the end
-        if index >= characters.len() {
-            break 'parsing;
-        }
+fn classify_char(c: &char) -> CharKind {
+    if c.is_whitespace() {
+        CharKind::Whitespace
+    } else if c.is_ascii_lowercase() {
+        CharKind::Lowercase
+    } else if c.is_ascii_uppercase() {
+        CharKind::Uppercase
+    } else if c.is_ascii_alphanumeric() {
+        CharKind::Numeric
+    } else if *c == '\'' || *c == '\"' {
+        CharKind::Literal
+    } else if c.is_ascii_punctuation() {
+        CharKind::Symbol
+    } else {
+        CharKind::None
+    }
+}
 
-        // Initialize a new token
-        let mut current_token: String = String::new();
+fn transform_symbol(value: String) -> SymbolType {
+    match value.as_str() {
+        "<" => SymbolType::LessThan,
+        ">" => SymbolType::GreaterThan,
+        "+" => SymbolType::Plus,
+        "-" => SymbolType::Minus,
+        "(" => SymbolType::LParen,
+        ")" => SymbolType::RParen,
+        "," => SymbolType::Comma,
+        "*" => SymbolType::Star,
+        "=" => SymbolType::Equals,
+        ";" => SymbolType::Semicolon,
+        _ => SymbolType::Unknown,
+    }
+}
 
-        // Get the next character in the string
-        let current_char = characters[index];
+fn print_characters(characters: &mut VecDeque<char>) {
+    println!();
+    for character in characters {
+        print!("{}", character);
+    }
+}
 
-        // Skip over white space
-        if char::is_whitespace(current_char) {
-            // Increment the index for the next token
-            index += 1;
-            continue 'parsing;
-        }
+#[derive(Debug, PartialEq)]
+pub struct TokenQueue {
+    tokens: VecDeque<Token>,
+}
 
-        if char::is_alphanumeric(current_char) {
-            //Build the current token with all consecutive alphanumeric
-            while index < characters.len() && char::is_alphanumeric(characters[index]) {
-                current_token.push(characters[index]);
+impl TokenQueue {
+    pub fn has_tokens(&self) -> bool {
+        !self.tokens.is_empty()
+    }
 
-                println!("Processing Character: {}", characters[index]);
+    pub fn new(tokens: VecDeque<Token>) -> TokenQueue {
+        TokenQueue { tokens }
+    }
 
-                // Increment for the next char
-                index += 1;
+    pub fn validate_token_type(&mut self, token_type: TokenTag) -> Result<Token, SyntaxError> {
+        match self.peek() {
+            Some(t) => {
+                if token_type == t.tag() {
+                    Ok(self.next()?)
+                } else {
+                    Err(SyntaxError::InvalidToken(InvalidToken::new(
+                        token_type,
+                        t.tag(),
+                    )))
+                }
             }
-
-            // Store the current token
-            println!("Storing token: {}", &current_token);
-            token_strings.push(current_token.clone());
-
-            // Early exit if we're at the end
-            if index >= characters.len() {
-                break;
-            }
-            continue 'parsing;
+            None => Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                token_type,
+            )))),
         }
+    }
 
-        if !char::is_alphanumeric(current_char) {
-            // Parse symbols
-            // The function handles incrementing the index itself
-            // This is so that it can handle compound symbols like >= and <=
-            current_token = tokenize_non_alphanumeric(&characters, &mut index);
+    pub fn check_next_symbol(&self, symbol_type: Vec<SymbolType>) -> bool {
+        match self.peek() {
+            Some(Token::Symbol(val)) => symbol_type.contains(val),
+            _ => false,
+        }
+    }
 
-            // Store the token
-            println!("Storing token: {}", &current_token);
-            token_strings.push(current_token.clone());
+    pub fn verify_symbol_type(
+        &mut self,
+        symbol_type: Vec<SymbolType>,
+    ) -> Result<Token, SyntaxError> {
+        match self.peek() {
+            Some(Token::Symbol(t)) => match symbol_type.contains(t) {
+                true => Ok(self.next()?),
+                false => Err(SyntaxError::UnexpectedSymbol(UnexpectedSymbol::new(t))),
+            },
+            Some(val) => Err(SyntaxError::InvalidToken(InvalidToken::new(
+                TokenTag::Symbol,
+                val.tag(),
+            ))),
+            None => Err(SyntaxError::MissingToken(MissingToken::new(Some(
+                TokenTag::Symbol,
+            )))),
+        }
+    }
+
+    pub fn validate_token_value(&mut self, value: Vec<&str>) -> Result<Token, SyntaxError> {
+        match self.peek() {
+            Some(t) => match value.contains(&t.value()) {
+                true => {
+                    let token = self.next()?;
+                    Ok(token)
+                }
+                false => Err(SyntaxError::InvalidValue(InvalidValue::new(
+                    value,
+                    t.value().to_string(),
+                ))),
+            },
+            None => Err(SyntaxError::MissingToken(MissingToken::new(None))),
+        }
+    }
+
+    pub fn next_token_type(&self) -> TokenTag {
+        match self.peek() {
+            Some(t) => t.tag(),
+            None => TokenTag::None,
+        }
+    }
+
+    pub fn next_token_contains(&self, value: Vec<&str>) -> bool {
+        match self.peek() {
+            Some(t) => value.contains(&t.value()),
+            None => false,
+        }
+    }
+
+    fn peek(&self) -> Option<&Token> {
+        if !self.tokens.is_empty() {
+            Some(self.tokens.front()?)
         } else {
-            return Err(io::Error::other("Non-parsable character encountered"));
+            None
         }
     }
 
-    Ok(token_strings)
+    pub fn next(&mut self) -> Result<Token, SyntaxError> {
+        if !self.tokens.is_empty() {
+            Ok(self.tokens.pop_front().unwrap())
+        } else {
+            Err(SyntaxError::MissingToken(MissingToken::new(None)))
+        }
+    }
+
+    pub fn print_queue(&self) {
+        println!();
+        for tok in &self.tokens {
+            println!("{}: {}", tok.tag().to_string(), tok.value());
+        }
+    }
 }
 
-fn tokenize_non_alphanumeric(characters: &[char], index: &mut usize) -> String {
-    let mut current_token: String;
-    match characters[*index] {
-        '<' => {
-            current_token = String::from("LESSTHAN");
-        }
-        '>' => {
-            current_token = String::from("GREATERTHAN");
-        }
-        '(' => {
-            current_token = String::from("LPAREN");
-        }
-        ')' => {
-            current_token = String::from("RPAREN");
-        }
-        ',' => {
-            current_token = String::from("COMMA");
-        }
-        '*' => {
-            current_token = String::from("STAR");
-        }
-        '=' => {
-            current_token = String::from("EQUALS");
-        }
-        '+' => {
-            current_token = String::from("PLUS");
-        }
-        '-' => {
-            current_token = String::from("MINUS");
-        }
-        ';' => {
-            current_token = String::from("SEMICOLON");
-        }
-        '\'' => {
-            current_token = String::from("SINGLEQUOTE");
-        }
-        '"' => {
-            current_token = String::from("DOUBLEQUOTE");
-        }
-        _ => {
-            current_token = String::from("UNK");
-        }
-    }
-
-    *index += 1;
-
-    // Handle the compound comparisons
-    if index < &mut characters.len() && characters[*index] == '=' {
-        match characters[*index - 1] {
-            '<' | '>' | '+' | '-' => {
-                current_token.push_str("EQUALS");
-                *index += 1;
-            }
-            _ => {}
-        }
-    }
-
-    // Return our constructed token
-    current_token
-}
-
-enum Token {
+#[derive(Debug, PartialEq)]
+pub enum Token {
     Keyword(Keyword),
     Identifier(Identifier),
-    StringLit(StringLiteral),
-    IntLit(IntLiteral),
-    Symbol(Symbol),
+    Literal(Literal),
+    Symbol(SymbolType),
 }
 
-struct Keyword {
-    value: String,
+impl Token {
+    pub fn value(&self) -> &str {
+        match self {
+            Token::Keyword(t) => t.value.as_str(),
+            Token::Identifier(t) => t.value.as_str(),
+            Token::Literal(t) => t.value.as_str(),
+            Token::Symbol(t) => t.print_type(),
+        }
+    }
+
+    pub fn tag(&self) -> TokenTag {
+        match self {
+            Token::Keyword(_) => TokenTag::Keyword,
+            Token::Identifier(_) => TokenTag::Identifier,
+            Token::Literal(_) => TokenTag::Literal,
+            Token::Symbol(_) => TokenTag::Symbol,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum TokenTag {
+    Keyword,
+    Identifier,
+    Literal,
+    Symbol,
+    None,
+}
+
+impl TokenTag {
+    pub fn to_string(&self) -> String {
+        match self {
+            TokenTag::Keyword => "Keyword".to_string(),
+            TokenTag::Identifier => "Identifier".to_string(),
+            TokenTag::Literal => "Literal".to_string(),
+            TokenTag::Symbol => "Symbol".to_string(),
+            TokenTag::None => "None".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Keyword {
+    pub value: String,
 }
 
 impl Keyword {
-    fn new(value: String) -> Keyword {
-        Keyword { value }
+    pub fn value(&self) -> &str {
+        self.value.as_str()
     }
 }
 
-struct Identifier {
-    value: String,
+#[derive(Debug, PartialEq)]
+pub struct Identifier {
+    pub value: String,
 }
 
 impl Identifier {
-    fn new(value: String) -> Identifier {
-        Identifier { value }
+    pub fn value(&self) -> &String {
+        &self.value
     }
 }
 
-struct StringLiteral {
-    value: String,
+#[derive(Debug, PartialEq)]
+pub struct Literal {
+    pub value: String,
+    pub literal_type: LiteralType,
 }
 
-impl StringLiteral {
-    fn new(value: String) -> StringLiteral {
-        StringLiteral { value }
-    }
+#[derive(Clone, Debug, PartialEq)]
+pub enum SymbolType {
+    Star,
+    Plus,
+    Minus,
+    Comma,
+    Equals,
+    LParen,
+    RParen,
+    Semicolon,
+    LessThan,
+    GreaterThan,
+    Unknown,
 }
 
-struct IntLiteral {
-    value: c_int,
-}
-
-impl IntLiteral {
-    fn new(value: c_int) -> IntLiteral {
-        IntLiteral { value }
-    }
-}
-
-struct Symbol {
-    value: String,
-}
-
-impl Symbol {
-    fn new(value: String) -> Symbol {
-        Symbol { value }
+impl SymbolType {
+    pub fn print_type(&self) -> &str {
+        match self {
+            SymbolType::Star => "Star",
+            SymbolType::Plus => "Plus",
+            SymbolType::Minus => "Minus",
+            SymbolType::Comma => "Comma",
+            SymbolType::Equals => "Equals",
+            SymbolType::LParen => "LParen",
+            SymbolType::RParen => "RParen",
+            SymbolType::Semicolon => "Semicolon",
+            SymbolType::LessThan => "LessThan",
+            SymbolType::GreaterThan => "GreaterThan",
+            SymbolType::Unknown => "Unknown",
+        }
     }
 }
 
@@ -237,134 +421,312 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_prefix_split() {
+    fn test_keyword() {
         assert_eq!(
-            seperate_tokens("*abc -def").unwrap(),
-            vec!["STAR", "abc", "MINUS", "def"]
+            tokenize("INSERT").unwrap(),
+            TokenQueue::new(VecDeque::from([Token::Keyword(Keyword {
+                value: "INSERT".to_string()
+            })]),)
         )
     }
 
     #[test]
-    fn test_suffix_split() {
+    fn test_no_quote_identifier() {
         assert_eq!(
-            seperate_tokens("abc+ def)").unwrap(),
-            vec!["abc", "PLUS", "def", "RPAREN"]
+            tokenize("abc").unwrap(),
+            TokenQueue::new(VecDeque::from([Token::Identifier(Identifier {
+                value: "abc".to_string()
+            })]))
         )
     }
 
     #[test]
-    fn test_prefix_and_suffix_split() {
+    fn test_quoted_identifier() {
         assert_eq!(
-            seperate_tokens("(xyz) (abc,").unwrap(),
-            vec!["LPAREN", "xyz", "RPAREN", "LPAREN", "abc", "COMMA"]
+            tokenize("\"two words\"").unwrap(),
+            TokenQueue::new(VecDeque::from([Token::Identifier(Identifier {
+                value: "two words".to_string()
+            })]))
         )
     }
 
     #[test]
-    fn mixed_alphanumeric_no_split() {
-        assert_eq!(seperate_tokens("123abc").unwrap(), vec!["123abc"]);
-    }
-
-    #[test]
-    fn test_numeric_with_suffix() {
+    fn test_string_literal() {
         assert_eq!(
-            seperate_tokens("(123) (123abc").unwrap(),
-            vec!["LPAREN", "123", "RPAREN", "LPAREN", "123abc"]
+            tokenize("\'abc\'").unwrap(),
+            TokenQueue::new(VecDeque::from([Token::Literal(Literal {
+                value: "abc".to_string(),
+                literal_type: LiteralType::String,
+            })]))
         )
     }
 
     #[test]
-    fn test_long_command() {
+    fn test_int_literal() {
         assert_eq!(
-            seperate_tokens("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);")
+            tokenize("123").unwrap(),
+            TokenQueue::new(VecDeque::from([Token::Literal(Literal {
+                value: "123".to_string(),
+                literal_type: LiteralType::Integer
+            })]))
+        )
+    }
+
+    #[test]
+    fn test_symbols() {
+        assert_eq!(
+            tokenize("< > ( ) * , = + - ;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Symbol(SymbolType::LessThan),
+                Token::Symbol(SymbolType::GreaterThan),
+                Token::Symbol(SymbolType::LParen),
+                Token::Symbol(SymbolType::RParen),
+                Token::Symbol(SymbolType::Star),
+                Token::Symbol(SymbolType::Comma),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::Plus),
+                Token::Symbol(SymbolType::Minus),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_compound_symbols() {
+        assert_eq!(
+            tokenize("<= >= += -=").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Symbol(SymbolType::LessThan),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::GreaterThan),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::Plus),
+                Token::Symbol(SymbolType::Equals),
+                Token::Symbol(SymbolType::Minus),
+                Token::Symbol(SymbolType::Equals),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_mixed_literals() {
+        assert_eq!(
+            tokenize("123 'abc' 456 'def'").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Literal(Literal {
+                    value: "123".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Literal(Literal {
+                    value: "abc".to_string(),
+                    literal_type: LiteralType::String,
+                }),
+                Token::Literal(Literal {
+                    value: "456".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Literal(Literal {
+                    value: "def".to_string(),
+                    literal_type: LiteralType::String,
+                })
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_mixed_quotes() {
+        assert_eq!(
+            tokenize("\"abc\" 'def' \"ghi\" 'jkl'").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Identifier(Identifier {
+                    value: "abc".to_string()
+                }),
+                Token::Literal(Literal {
+                    value: "def".to_string(),
+                    literal_type: LiteralType::String,
+                }),
+                Token::Identifier(Identifier {
+                    value: "ghi".to_string()
+                }),
+                Token::Literal(Literal {
+                    value: "jkl".to_string(),
+                    literal_type: LiteralType::String,
+                }),
+            ]))
+        )
+    }
+
+    #[test]
+    fn test_create_command() {
+        assert_eq!(
+            tokenize("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);")
                 .unwrap(),
-            vec![
-                "CREATE",
-                "TABLE",
-                "users",
-                "LPAREN",
-                "id",
-                "INTEGER",
-                "PRIMARY",
-                "KEY",
-                "COMMA",
-                "name",
-                "TEXT",
-                "COMMA",
-                "age",
-                "INTEGER",
-                "RPAREN",
-                "SEMICOLON"
-            ]
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "CREATE".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "TABLE".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Symbol(SymbolType::LParen),
+                Token::Identifier(Identifier {
+                    value: "id".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "INTEGER".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "PRIMARY".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "KEY".to_string()
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Identifier(Identifier {
+                    value: "name".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "TEXT".to_string()
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Identifier(Identifier {
+                    value: "age".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "INTEGER".to_string()
+                }),
+                Token::Symbol(SymbolType::RParen),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
         )
     }
 
     #[test]
-    fn test_full_insert_command() {
+    fn test_insert_command() {
         assert_eq!(
-            seperate_tokens("INSERT INTO users VALUES (1, 'daniel', 24);").unwrap(),
-            vec![
-                "INSERT",
-                "INTO",
-                "users",
-                "VALUES",
-                "LPAREN",
-                "1",
-                "COMMA",
-                "SINGLEQUOTE",
-                "daniel",
-                "SINGLEQUOTE",
-                "COMMA",
-                "24",
-                "RPAREN",
-                "SEMICOLON"
-            ]
+            tokenize("INSERT INTO users VALUES (1, 'daniel', 24);").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "INSERT".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "INTO".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "VALUES".to_string()
+                }),
+                Token::Symbol(SymbolType::LParen),
+                Token::Literal(Literal {
+                    value: "1".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Literal(Literal {
+                    value: "daniel".to_string(),
+                    literal_type: LiteralType::String
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Literal(Literal {
+                    value: "24".to_string(),
+                    literal_type: LiteralType::Integer
+                }),
+                Token::Symbol(SymbolType::RParen),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
         )
     }
 
     #[test]
-    fn test_full_select_command_with_wildcard() {
+    fn test_select_command_with_wildcard() {
         assert_eq!(
-            seperate_tokens("SELECT * FROM users;").unwrap(),
-            vec!["SELECT", "STAR", "FROM", "users", "SEMICOLON"]
+            tokenize("SELECT * FROM users;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "SELECT".to_string()
+                }),
+                Token::Symbol(SymbolType::Star),
+                Token::Keyword(Keyword {
+                    value: "FROM".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
         )
     }
 
     #[test]
-    fn test_full_select_command_with_columns_and_clause() {
+    fn test_select_command_with_conditions() {
         assert_eq!(
-            seperate_tokens("SELECT name, age FROM users WHERE id = 1;").unwrap(),
-            vec![
-                "SELECT",
-                "name",
-                "COMMA",
-                "age",
-                "FROM",
-                "users",
-                "WHERE",
-                "id",
-                "EQUALS",
-                "1",
-                "SEMICOLON"
-            ]
+            tokenize("SELECT name, age FROM users WHERE id = 1;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "SELECT".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "name".to_string()
+                }),
+                Token::Symbol(SymbolType::Comma),
+                Token::Identifier(Identifier {
+                    value: "age".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "FROM".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "WHERE".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "id".to_string()
+                }),
+                Token::Symbol(SymbolType::Equals),
+                Token::Literal(Literal {
+                    value: "1".to_string(),
+                    literal_type: LiteralType::Integer,
+                }),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
         )
     }
 
     #[test]
-    fn test_full_select_command_with_wildcard_and_clause() {
+    fn test_select_command_with_conditions_and_wildcard() {
         assert_eq!(
-            seperate_tokens("SELECT * FROM users WHERE age > 20;").unwrap(),
-            vec![
-                "SELECT",
-                "STAR",
-                "FROM",
-                "users",
-                "WHERE",
-                "age",
-                "GREATERTHAN",
-                "20",
-                "SEMICOLON"
-            ]
+            tokenize("SELECT * FROM users WHERE age > 20;").unwrap(),
+            TokenQueue::new(VecDeque::from([
+                Token::Keyword(Keyword {
+                    value: "SELECT".to_string()
+                }),
+                Token::Symbol(SymbolType::Star),
+                Token::Keyword(Keyword {
+                    value: "FROM".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "users".to_string()
+                }),
+                Token::Keyword(Keyword {
+                    value: "WHERE".to_string()
+                }),
+                Token::Identifier(Identifier {
+                    value: "age".to_string()
+                }),
+                Token::Symbol(SymbolType::GreaterThan),
+                Token::Literal(Literal {
+                    value: "20".to_string(),
+                    literal_type: LiteralType::Integer,
+                }),
+                Token::Symbol(SymbolType::Semicolon),
+            ]))
         )
     }
 }
